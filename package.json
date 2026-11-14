@@ -1,0 +1,27 @@
+{
+  "name": "job-fit-studio",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "JobFit Studio — 채용 공고 맞춤 이력서·면접 패키지 생성기. 공고 한 편과 경력 원본으로 적합도·갭, 경력기술서 리라이트, 압박 면접 STAR 답변을 한 화면에서 만드는 커리어 콘솔",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.544.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
