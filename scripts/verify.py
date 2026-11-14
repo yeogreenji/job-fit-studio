@@ -26,6 +26,18 @@ with sync_playwright() as p:
 
     check("empty state headline", page.get_by_text("지원 패키지가 나옵니다").count() > 0)
 
+    # raw JD paste -> auto split
+    page.get_by_role("button", name="원문 입력").click()
+    page.wait_for_timeout(300)
+    page.locator("textarea[placeholder*='담당 업무']").fill("담당 업무\n- 보도자료 작성과 기자 대응\n\n자격 요건\n- PR 경력 5년 이상\n\n우대 사항\n- SaaS 경험\n\n조직 문화\n- 빠른 실행")
+    page.get_by_role("button", name="문단으로 자동 나누기").click()
+    page.wait_for_timeout(500)
+    check("raw jd split", page.locator("textarea[placeholder^='미디어 릴레이션']").input_value().startswith("보도자료 작성"))
+    check("raw jd requirements", "PR 경력 5년 이상" in page.locator("textarea[placeholder^='경력 5년 이상']").input_value())
+    check("raw jd tone", "빠른 실행" in page.locator("textarea[placeholder^='빠른 실행']").input_value())
+
+    page.reload(wait_until="networkidle")
+    page.wait_for_timeout(700)
     page.get_by_role("button", name="이 공고로 생성").first.click()
     page.wait_for_selector("text=적합도 진단", timeout=20000)
     page.wait_for_timeout(1200)
@@ -117,8 +129,13 @@ with sync_playwright() as p:
     page.wait_for_timeout(400)
     check("api modal", page.get_by_text("LLM 정밀 보정").count() > 0)
     page.get_by_role("button", name="Anthropic").click()
-    page.get_by_role("button", name="취소").click()
-    page.wait_for_timeout(300)
+    page.locator("input[placeholder='sk-...']").fill("sk-test-not-a-real-key")
+    page.get_by_role("switch", name="LLM 사용").click()
+    page.get_by_role("button", name="저장").click()
+    page.wait_for_timeout(500)
+    cfg = page.evaluate("JSON.parse(localStorage.getItem('jobfit.api.v1')||'{}')")
+    check("api config saved", cfg.get("provider") == "anthropic" and cfg.get("enabled") is True and cfg.get("apiKey") == "sk-test-not-a-real-key")
+    check("api key masked", page.locator("input[type=password]").count() == 0)
 
     # mobile
     mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
