@@ -89,7 +89,7 @@ npm run preview    # http://localhost:4183
 ```
 
 - Node 22, Vite 7, React 19, TypeScript 5.9, Tailwind CSS 4, lucide-react
-- 검증: `python3 scripts/verify.py` (preview 서버 실행 후) — 기능 체크 33개, 콘솔·페이지 에러 0
+- 검증: `python3 scripts/verify.py` (preview 서버 실행 후) — 기능 체크 38개, 콘솔·페이지 에러 0
 - 스크린샷: `python3 scripts/shots.py`
 
 ---
