@@ -86,7 +86,7 @@ with sync_playwright() as p:
     content = open(path, encoding="utf-8").read()
     check("markdown exported", len(content) > 3000)
     check("markdown sections", all(t in content for t in ["적합도 요약", "키워드 매칭과 갭", "핵심 어필 포인트", "경력기술서 리라이트", "면접 예상 질문 & STAR", "체크리스트"]))
-    check("markdown no real names", "안지현" not in content and "하이브월드와이드" not in content)
+    check("markdown company name", "클라우드플로우" in content)
 
     # generate two more packages from samples
     page.get_by_role("button", name="어반모빌리티").first.click()
