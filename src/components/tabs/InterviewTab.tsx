@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { ArrowRight, Info, RotateCcw, ShieldAlert, Target } from "lucide-react";
-import type { InterviewQuestion, JobPackage, QuestionCategory, StarAnswer } from "../../types";
+import { ArrowRight, Info, Mic, RotateCcw, Target } from "lucide-react";
+import type { AiConfig, AiStatus, InterviewFeedback, InterviewQuestion, JobPackage, QuestionCategory, StarAnswer } from "../../types";
 import { starToText } from "../../lib/engine";
 import { Card, CopyButton, Difficulty, Eyebrow, cx } from "../ui";
+import { MockInterview } from "../MockInterview";
 
 const CATEGORY_STYLE: Record<QuestionCategory, string> = {
   전환: "bg-info-soft text-info",
@@ -103,14 +104,23 @@ function QuestionCard({
 
 export function InterviewTab({
   pkg,
+  aiStatus,
+  config,
   onStar,
   onReset,
+  onFeedback,
+  onNotify,
 }: {
   pkg: JobPackage;
+  aiStatus: AiStatus;
+  config: AiConfig;
   onStar: (id: string, key: keyof StarAnswer, value: string) => void;
   onReset: (id: string) => void;
+  onFeedback: (feedback: InterviewFeedback) => void;
+  onNotify: (message: string, tone?: "ok" | "warn" | "err") => void;
 }) {
   const [filter, setFilter] = useState<"all" | "hard" | QuestionCategory>("all");
+  const [mode, setMode] = useState<"prep" | "mock">("prep");
 
   const questions = useMemo(() => {
     if (filter === "all") return pkg.questions;
@@ -148,43 +158,61 @@ export function InterviewTab({
           </div>
         </div>
 
-        <div className="mt-3 flex items-center gap-1 overflow-x-auto pb-0.5">
-          {FILTERS.filter((f) => f === "all" || f === "hard" || categories.includes(f)).map((id) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setFilter(id)}
-              className={cx(
-                "shrink-0 rounded-lg px-2.5 py-1 text-[10.5px] font-semibold transition-colors",
-                filter === id ? "bg-ink text-white" : "text-muted hover:bg-paper-deep hover:text-ink",
-              )}
-            >
-              {id === "all" ? "전체" : id === "hard" ? "압박만" : id}
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
+          <div className="seg">
+            <button type="button" data-active={mode === "prep"} className="seg-item flex items-center gap-1.5" onClick={() => setMode("prep")}>
+              <Target size={11} /> STAR 준비
             </button>
-          ))}
-          <span className="ml-auto hidden items-center gap-1 text-[9.5px] text-faint sm:flex">
-            <ShieldAlert size={11} />
-            난이도 ●●● = 꼬리 질문이 이어지는 질문
-          </span>
+            <button type="button" data-active={mode === "mock"} className="seg-item flex items-center gap-1.5" onClick={() => setMode("mock")} data-testid="mode-mock">
+              <Mic size={11} /> 모의면접 90초
+            </button>
+          </div>
+          <div className="ml-auto flex items-center gap-1 overflow-x-auto">
+            {FILTERS.filter((f) => f === "all" || f === "hard" || categories.includes(f)).map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setFilter(id)}
+                className={cx(
+                  "shrink-0 rounded-lg px-2.5 py-1 text-[10.5px] font-semibold transition-colors",
+                  filter === id ? "bg-ink text-white" : "text-muted hover:bg-paper-deep hover:text-ink",
+                )}
+              >
+                {id === "all" ? "전체" : id === "hard" ? "압박만" : id}
+              </button>
+            ))}
+          </div>
         </div>
       </Card>
 
-      <div className="space-y-2.5">
-        {questions.map((question, index) => (
-          <QuestionCard key={question.id} question={question} index={pkg.questions.indexOf(question) >= 0 ? pkg.questions.indexOf(question) : index} onStar={onStar} onReset={onReset} />
-        ))}
-        {questions.length === 0 && (
-          <Card className="p-6 text-center text-[12px] text-muted">이 필터에 해당하는 질문이 없습니다.</Card>
-        )}
-      </div>
+      {mode === "mock" ? (
+        <MockInterview pkg={pkg} aiStatus={aiStatus} config={config} onFeedback={onFeedback} onNotify={onNotify} />
+      ) : (
+        <>
+          <div className="space-y-2.5">
+            {questions.map((question, index) => (
+              <QuestionCard
+                key={question.id}
+                question={question}
+                index={pkg.questions.indexOf(question) >= 0 ? pkg.questions.indexOf(question) : index}
+                onStar={onStar}
+                onReset={onReset}
+              />
+            ))}
+            {questions.length === 0 && (
+              <Card className="p-6 text-center text-[12px] text-muted">이 필터에 해당하는 질문이 없습니다.</Card>
+            )}
+          </div>
 
-      <div className="flex items-start gap-2 rounded-xl border border-line bg-surface px-3.5 py-3">
-        <ArrowRight size={13} className="mt-0.5 shrink-0 text-accent" />
-        <p className="text-[10.5px] leading-relaxed text-muted">
-          모든 답변은 경력 원본의 사실로만 채우세요. 수치를 모르면 “[확인 필요]”로 남기고 지원 전에 실제 값으로 바꾸는 편이 안전합니다.
-          답변을 채운 뒤 <span className="font-semibold text-ink-2">내보내기 → 면접 준비 시트</span>로 인쇄하면 한 장으로 들고 갈 수 있습니다.
-        </p>
-      </div>
+          <div className="flex items-start gap-2 rounded-xl border border-line bg-surface px-3.5 py-3">
+            <ArrowRight size={13} className="mt-0.5 shrink-0 text-accent" />
+            <p className="text-[10.5px] leading-relaxed text-muted">
+              모든 답변은 경력 원본의 사실로만 채우세요. 수치를 모르면 “[확인 필요]”로 남기고 지원 전에 실제 값으로 바꾸는 편이 안전합니다.
+              답변을 채운 뒤 <span className="font-semibold text-ink-2">내보내기 → 면접 준비 시트</span>로 인쇄하면 한 장으로 들고 갈 수 있습니다.
+            </p>
+          </div>
+        </>
+      )}
     </div>
   );
 }

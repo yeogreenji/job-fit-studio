@@ -1,4 +1,4 @@
-import { History, LifeBuoy, Settings2, Target } from "lucide-react";
+import { History, LifeBuoy, ListChecks, Settings2, Target } from "lucide-react";
 import type { ViewId } from "../types";
 import { cx } from "./ui";
 
@@ -63,8 +63,11 @@ export function Sidebar({
         <NavButton active={view === "history"} label="패키지 히스토리" onClick={() => onChangeView("history")}>
           <History size={18} strokeWidth={1.9} />
         </NavButton>
+        <NavButton active={view === "tracker"} label="지원 현황 트래커" onClick={() => onChangeView("tracker")}>
+          <ListChecks size={18} strokeWidth={1.9} />
+        </NavButton>
         <div className="my-2 h-px w-6 bg-white/10" />
-        <NavButton label="엔진·API 설정" onClick={onOpenApi}>
+        <NavButton label="AI·엔진 설정" onClick={onOpenApi}>
           <Settings2 size={18} strokeWidth={1.9} />
         </NavButton>
         <NavButton label="도움말" onClick={onOpenHelp}>

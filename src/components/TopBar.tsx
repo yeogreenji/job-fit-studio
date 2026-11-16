@@ -1,26 +1,29 @@
-import { ChevronDown, Command, Sparkles } from "lucide-react";
-import type { ViewId } from "../types";
+import { ChevronDown, Command, Sparkles, WifiOff } from "lucide-react";
+import type { AiStatusKind, ViewId } from "../types";
 import { cx } from "./ui";
 
 export function TopBar({
   view,
   company,
   role,
-  apiEnabled,
-  onOpenApi,
+  mode,
+  model,
+  onOpenAi,
   onOpenHistory,
-  onOpenGuide,
   onOpenTracker,
+  onOpenGuide,
 }: {
   view: ViewId;
   company: string;
   role: string;
-  apiEnabled: boolean;
-  onOpenApi: () => void;
+  mode: AiStatusKind;
+  model?: string;
+  onOpenAi: () => void;
   onOpenHistory: () => void;
   onOpenTracker: () => void;
   onOpenGuide: () => void;
 }) {
+  const live = mode === "live";
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-paper/85 backdrop-blur-md lg:pl-[68px]">
       <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
@@ -36,16 +39,12 @@ export function TopBar({
             <span className="sm:hidden">JobFit</span>
             <ChevronDown size={13} className="text-faint" />
           </button>
-          <button type="button" className="btn btn-outline shrink-0 text-xs" onClick={onOpenTracker} aria-current={view === "tracker" ? "page" : undefined}>공고 관리</button>
           <span className="hidden h-4 w-px bg-line-strong sm:block" />
           <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
             <button
               type="button"
-              onClick={onOpenHistory}
-              className={cx(
-                "rounded-md px-1.5 py-1 text-[12.5px] transition-colors",
-                view === "history" ? "font-medium text-ink" : "text-muted hover:text-ink",
-              )}
+              onClick={view === "history" ? onOpenHistory : onOpenHistory}
+              className={cx("rounded-md px-1.5 py-1 text-[12.5px] transition-colors", view === "history" ? "font-medium text-ink" : "text-muted hover:text-ink")}
             >
               {view === "history" ? "패키지 히스토리" : company || "지원 스튜디오"}
             </button>
@@ -55,26 +54,39 @@ export function TopBar({
                 <span className="max-w-[210px] truncate text-[12px] text-muted">{role || "직무 미입력"}</span>
               </>
             )}
+            <span className="text-[11px] text-faint">/</span>
+            <button
+              type="button"
+              onClick={onOpenTracker}
+              className={cx("rounded-md px-1.5 py-1 text-[12.5px] transition-colors", view === "tracker" ? "font-medium text-ink" : "text-muted hover:text-ink")}
+            >
+              지원 현황
+            </button>
           </span>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className="hidden items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 md:inline-flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-            <span className="text-[11px] font-medium text-ink-2">키워드 엔진 v1.0</span>
-          </span>
+          <button
+            type="button"
+            onClick={onOpenAi}
+            className={cx(
+              "hidden items-center gap-1.5 rounded-full border px-2.5 py-1 md:inline-flex",
+              live ? "border-accent/25 bg-accent-soft text-accent-deep" : "border-warn/25 bg-warn-soft text-warn",
+            )}
+            data-testid="topbar-mode"
+          >
+            {live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" /> : <WifiOff size={10} />}
+            <span className="text-[11px] font-medium">{live ? `실시간 AI · ${model ?? "gpt-4o-mini"}` : "규칙 엔진 모드"}</span>
+          </button>
 
           <button
             type="button"
-            onClick={onOpenApi}
-            className={cx(
-              "btn h-[30px] gap-1.5 px-2.5 text-[11.5px]",
-              apiEnabled ? "border border-accent/25 bg-accent-soft text-accent-deep" : "btn-outline",
-            )}
+            onClick={onOpenAi}
+            className={cx("btn h-[30px] gap-1.5 px-2.5 text-[11.5px]", live ? "border border-accent/25 bg-accent-soft text-accent-deep" : "btn-outline")}
           >
             <Sparkles size={13} />
-            <span className="hidden sm:inline">{apiEnabled ? "LLM 보정 켜짐" : "LLM 연동"}</span>
-            {apiEnabled && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
+            <span className="hidden sm:inline">{live ? "AI 연결됨" : "AI 연결"}</span>
+            {live && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
           </button>
 
           <span className="hidden items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 text-[10.5px] text-muted lg:inline-flex">

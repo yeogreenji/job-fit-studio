@@ -9,12 +9,18 @@ export function Card({
   children,
   className,
   as: Tag = "div",
+  testId,
 }: {
   children: ReactNode;
   className?: string;
   as?: "div" | "section" | "aside" | "article";
+  testId?: string;
 }) {
-  return <Tag className={cx("card", className)}>{children}</Tag>;
+  return (
+    <Tag className={cx("card", className)} data-testid={testId}>
+      {children}
+    </Tag>
+  );
 }
 
 export function Eyebrow({ children, className }: { children: ReactNode; className?: string }) {

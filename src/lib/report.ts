@@ -1,4 +1,5 @@
 import type { JobPackage } from "../types";
+import { buildLocalIntro, buildLocalReverse, speakingSeconds } from "./coach";
 
 const SECTION_LABEL: Record<string, string> = {
   matched: "매칭",
@@ -20,7 +21,7 @@ export function buildMarkdown(pkg: JobPackage): string {
   lines.push(`- 지원자: ${pkg.resumeName} (${pkg.resumeHeadline}, 경력 ${pkg.years}년)`);
   lines.push(`- 고용 형태: ${pkg.employmentType}${pkg.location ? ` · ${pkg.location}` : ""}`);
   lines.push(`- 생성: ${when.getFullYear()}.${pad(when.getMonth() + 1)}.${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`);
-  lines.push(`- 엔진: ${pkg.engine === "llm" ? "내장 엔진 + LLM 정밀 보정" : "내장 키워드 매칭 엔진 v1.0"}`);
+  lines.push(`- 엔진: ${pkg.engine === "ai" ? `AI 분석${pkg.aiModel ? ` (${pkg.aiModel})` : ""}` : "내장 키워드 매칭 엔진 v1.0"}`);
   lines.push("");
   lines.push("## 1. 적합도 요약");
   lines.push("");
@@ -87,7 +88,22 @@ export function buildMarkdown(pkg: JobPackage): string {
     if (rewrite.matched.length) lines.push(`- 키워드: ${rewrite.matched.join(", ")}`);
     lines.push("");
   }
-  lines.push("## 5. 면접 예상 질문 & STAR");
+  lines.push("## 5. 1분 자기소개 · 역질문");
+  lines.push("");
+  const intro = pkg.intro ?? buildLocalIntro(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match);
+  const reverse = pkg.reverse ?? buildLocalReverse(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match);
+  lines.push(`### 1분 자기소개 (${intro.text.replace(/\s+/g, "").length}자 · 약 ${speakingSeconds(intro.text)}초 · ${intro.source === "ai" ? "AI 생성" : "규칙 생성"})`);
+  lines.push("");
+  lines.push(intro.text);
+  lines.push("");
+  lines.push("### 마지막 역질문");
+  lines.push("");
+  reverse.forEach((item, index) => {
+    lines.push(`${index + 1}. [${item.tone}] ${item.question}`);
+    lines.push(`   - 의도: ${item.intent}`);
+  });
+  lines.push("");
+  lines.push("## 6. 면접 예상 질문 & STAR");
   lines.push("");
   pkg.questions.forEach((q, index) => {
     lines.push(`### Q${index + 1}. [${q.category} · ${DIFFICULTY[q.difficulty]}] ${q.question}`);
@@ -101,7 +117,23 @@ export function buildMarkdown(pkg: JobPackage): string {
     lines.push(`- **R** ${q.star.result}`);
     lines.push("");
   });
-  lines.push("## 6. 제출 전 체크리스트");
+  lines.push("## 7. 모의면접 피드백");
+  lines.push("");
+  const feedback = (pkg.feedback ?? []).slice(0, 5);
+  if (feedback.length === 0) {
+    lines.push("아직 모의면접 기록이 없습니다. 앱의 면접 탭 → 모의면접 90초에서 답변을 연습하세요.");
+  } else {
+    for (const item of feedback) {
+      lines.push(`### ${item.question}`);
+      lines.push(`- 점수: ${item.score}/100 · ${item.seconds}초 · ${item.source === "ai" ? "AI" : "규칙"} 피드백`);
+      lines.push(`- 잘한 점: ${item.strengths.join(" / ")}`);
+      lines.push(`- 보완할 점: ${item.improvements.join(" / ")}`);
+      lines.push(`- 꼬리질문: ${item.followUp}`);
+      lines.push("");
+    }
+  }
+  lines.push("");
+  lines.push("## 8. 제출 전 체크리스트");
   lines.push("");
   lines.push(`- [${adopted.length === pkg.rewrites.length ? "x" : " "}] 경력기술서 리라이트 전체 반영 검토 (${adopted.length}/${pkg.rewrites.length})`);
   lines.push(`- [${pkg.questions.every((q) => q.star.result && !q.star.result.startsWith("[")) ? "x" : " "}] STAR 답변의 결과 수치 채우기`);
@@ -117,15 +149,19 @@ export function buildMarkdown(pkg: JobPackage): string {
 
 export function buildInterviewSheet(pkg: JobPackage): string {
   const lines: string[] = [];
+  const intro = pkg.intro ?? buildLocalIntro(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match);
+  const reverse = pkg.reverse ?? buildLocalReverse(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match);
   lines.push(`# ${pkg.company} ${pkg.role} — 면접 준비 시트`);
   lines.push("");
   lines.push(`적합도 ${pkg.match.score}/100 · ${pkg.match.grade.label} · ${pkg.match.tone.label}`);
   lines.push("");
-  lines.push("## 30초 자기소개");
+  lines.push("## 1분 자기소개");
   lines.push(`${pkg.resumeName} · ${pkg.resumeHeadline} · 경력 ${pkg.years}년`);
   lines.push("");
-  lines.push(pkg.summary.adopted ? pkg.summary.after : pkg.summary.before);
-  lines.push(pkg.appeals.map((a) => `- ${a.title}`).join("\n"));
+  lines.push(intro.text);
+  lines.push("");
+  lines.push("## 마지막 역질문");
+  reverse.forEach((item, index) => lines.push(`${index + 1}. ${item.question}`));
   lines.push("");
   lines.push("## 예상 질문");
   pkg.questions.forEach((q, i) => {

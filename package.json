@@ -3,12 +3,16 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "JobFit Studio — 채용 공고 맞춤 이력서·면접 패키지 생성기. 공고 한 편과 경력 원본으로 적합도·갭, 경력기술서 리라이트, 압박 면접 STAR 답변을 한 화면에서 만드는 커리어 콘솔",
+  "description": "JobFit Studio — 채용 공고 한 편과 내 이력서로 적합도·갭 분석, 공고 맞춤 리라이트, 1분 자기소개·역질문, 90초 모의면접 피드백, 지원 현황·처우 협상까지 만드는 실전형 AI 커리어 코치",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.api.json",
+    "typecheck:app": "tsc --noEmit",
+    "typecheck:api": "tsc -p tsconfig.api.json",
+    "test:e2e": "python3 scripts/verify.py",
+    "shots": "python3 scripts/shots.py"
   },
   "dependencies": {
     "lucide-react": "^0.544.0",

@@ -1,17 +1,21 @@
-import { ArrowUpRight, Check, ChevronRight, CircleDashed, Info } from "lucide-react";
-import type { JobPackage } from "../types";
+import { Check, ChevronRight, CircleDashed, Info } from "lucide-react";
+import type { ApplicationEntry, JobPackage } from "../types";
 import { Card, Eyebrow, Meter, ScoreRing, SectionHead, cx } from "./ui";
 
 export function Rail({
   pkg,
   saved,
+  entries,
   onLoad,
   onOpenHistory,
+  onOpenTracker,
 }: {
   pkg: JobPackage | null;
   saved: JobPackage[];
+  entries: ApplicationEntry[];
   onLoad: (pkg: JobPackage) => void;
   onOpenHistory: () => void;
+  onOpenTracker: () => void;
 }) {
   const previous = pkg ? saved.find((p) => p.id !== pkg.id && p.company === pkg.company) : null;
   const answered = pkg ? pkg.questions.filter((q) => q.edited).length : 0;
@@ -116,34 +120,43 @@ export function Rail({
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between px-3.5 py-2.5">
           <SectionHead eyebrow="Pipeline" title="지원 현황" />
-          <button type="button" onClick={onOpenHistory} className="flex items-center gap-0.5 text-[9.5px] text-muted hover:text-ink">
-            전체 <ChevronRight size={11} />
+          <button type="button" onClick={onOpenTracker} className="flex items-center gap-0.5 text-[9.5px] text-muted hover:text-ink">
+            트래커 <ChevronRight size={11} />
           </button>
         </div>
         <div className="divide-y divide-line border-t border-line">
-          {saved.slice(0, 5).map((item) => {
-            const active = pkg?.id === item.id;
+          {entries.slice(0, 5).map((entry) => {
+            const linked = saved.find((item) => item.id === entry.packageId || (item.company === entry.company && item.role === entry.role));
             return (
               <button
-                key={item.id}
+                key={entry.id}
                 type="button"
-                onClick={() => onLoad(item)}
-                className={cx("flex w-full items-center gap-2 px-3.5 py-2 text-left transition-colors", active ? "bg-accent-soft/50" : "hover:bg-[#fbfbf8]")}
+                onClick={() => (linked ? onLoad(linked) : onOpenTracker())}
+                className={cx("flex w-full items-center gap-2 px-3.5 py-2 text-left transition-colors", pkg?.id === entry.packageId ? "bg-accent-soft/50" : "hover:bg-[#fbfbf8]")}
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[10.5px] font-semibold text-ink">{item.company}</span>
-                  <span className="block truncate text-[9px] text-faint">{item.role}</span>
+                  <span className="block truncate text-[10.5px] font-semibold text-ink">{entry.company}</span>
+                  <span className="block truncate text-[9px] text-faint">{entry.role || "직무 미입력"}</span>
                 </span>
-                <span className="w-10 shrink-0">
-                  <Meter value={item.match.score} height={3} />
-                </span>
-                <span className="num w-5 text-right text-[10px] font-semibold text-ink-2">{item.match.score}</span>
-                {active && <ArrowUpRight size={10} className="text-accent" />}
+                <span className="chip shrink-0 bg-paper-deep px-1.5 py-0.5 text-[8.5px] text-muted">{entry.stage}</span>
+                {typeof entry.score === "number" ? (
+                  <span className="num w-5 text-right text-[10px] font-semibold text-ink-2">{entry.score}</span>
+                ) : (
+                  <span className="num w-5 text-right text-[10px] text-faint">—</span>
+                )}
               </button>
             );
           })}
-          {saved.length === 0 && <p className="px-3.5 py-4 text-[10px] leading-relaxed text-faint">패키지를 생성하면 회사별 점수가 여기에 쌓입니다.</p>}
+          {entries.length === 0 && <p className="px-3.5 py-4 text-[10px] leading-relaxed text-faint">패키지를 생성하면 지원 건이 여기에 쌓입니다. 트래커에서 직접 추가할 수도 있습니다.</p>}
         </div>
+        {entries.length > 0 && (
+          <div className="flex items-center justify-between border-t border-line bg-[#fcfcf9] px-3.5 py-1.5">
+            <span className="text-[9px] text-faint">총 {entries.length}건 · 오퍼 {entries.filter((e) => e.stage === "오퍼").length}건</span>
+            <button type="button" onClick={onOpenHistory} className="flex items-center gap-0.5 text-[9px] text-muted hover:text-ink">
+              패키지 히스토리 <ChevronRight size={10} />
+            </button>
+          </div>
+        )}
       </Card>
 
       <div className="rounded-xl border border-line bg-[#fcfcf9] px-3.5 py-3">

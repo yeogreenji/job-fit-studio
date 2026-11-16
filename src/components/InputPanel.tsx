@@ -9,10 +9,11 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import type { Experience, JobPosting, MasterResume } from "../types";
+import type { AiStatus, Experience, JobPosting, MasterResume } from "../types";
 import { SAMPLE_JOBS, SAMPLE_JOB_LABELS, SAMPLE_RESUMES } from "../lib/presets";
 import { parseRawJob } from "../lib/korean";
 import { cx, Kbd } from "./ui";
+import { FilePickButton } from "./ImportDialog";
 
 export const RUN_STEPS = ["공고 키워드 추출", "적합도·갭 계산", "경력 문장 리라이트", "압박 질문 생성"];
 
@@ -45,7 +46,7 @@ function JobEditor({ job, onJob }: { job: JobPosting; onJob: (job: JobPosting) =
   return (
     <div className="space-y-3">
       <div>
-        <Label>샘플 공고로 시작</Label>
+        <Label>예시 공고로 테스트</Label>
         <div className="grid grid-cols-3 gap-1.5">
           {SAMPLE_JOBS.map((sample) => {
             const active = sample.id === job.id;
@@ -199,7 +200,7 @@ function ResumeEditor({
   return (
     <div className="space-y-3">
       <div>
-        <Label>샘플 경력 원본</Label>
+        <Label>예시 경력 원본</Label>
         <div className="grid grid-cols-3 gap-1.5">
           {SAMPLE_RESUMES.map((sample) => {
             const active = sample.id === activeSample;
@@ -400,13 +401,14 @@ export function InputPanel({
   onJob,
   onResume,
   onSampleResume,
-  onReset,
+  onBlank,
+  onFile,
   activeSampleJob,
   activeSampleResume,
   running,
   step,
   onGenerate,
-  apiEnabled,
+  aiStatus,
   onOpenApi,
 }: {
   job: JobPosting;
@@ -416,15 +418,17 @@ export function InputPanel({
   onJob: (job: JobPosting) => void;
   onResume: (resume: MasterResume) => void;
   onSampleResume: (resume: MasterResume) => void;
-  onReset: () => void;
+  onBlank: () => void;
+  onFile: (file: File) => void;
   activeSampleJob: string | null;
   activeSampleResume: string | null;
   running: boolean;
   step: number;
   onGenerate: () => void;
-  apiEnabled: boolean;
+  aiStatus: AiStatus;
   onOpenApi: () => void;
 }) {
+  const live = aiStatus.kind === "live";
   return (
     <div className="card flex h-[calc(100dvh-176px)] flex-col overflow-hidden lg:h-full">
       <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2.5">
@@ -437,9 +441,21 @@ export function InputPanel({
           </button>
         </div>
         <div className="flex items-center gap-1">
-          <span className="chip bg-paper-deep px-1.5 py-0.5 text-[9px] text-faint">{activeSampleJob ? "샘플 공고" : "직접 입력"}</span>
-          <button type="button" onClick={onReset} className="btn btn-ghost h-6 px-1.5 text-[10px] text-faint hover:text-ink" title="입력 초기화 (샘플로)">
-            초기화
+          <span className="chip hidden bg-paper-deep px-1.5 py-0.5 text-[9px] text-faint sm:inline-flex">{activeSampleJob ? "예시" : "내 입력"}</span>
+          <FilePickButton
+            label="파일"
+            onFile={onFile}
+            testId="input-import"
+            className="btn btn-ghost h-6 px-1.5 text-[10px] text-muted hover:text-ink"
+          />
+          <button
+            type="button"
+            onClick={onBlank}
+            className="btn btn-ghost h-6 px-1.5 text-[10px] text-faint hover:text-ink"
+            title="예시를 지우고 내 이력서·공고를 새로 입력합니다"
+            data-testid="input-blank"
+          >
+            비우기
           </button>
         </div>
       </div>
@@ -474,9 +490,9 @@ export function InputPanel({
           </button>
         )}
         <div className="mt-2 flex items-center justify-between gap-2">
-          <button type="button" onClick={onOpenApi} className="flex items-center gap-1 truncate text-[10px] text-muted hover:text-ink">
-            <Sparkles size={10} className={apiEnabled ? "text-accent" : "text-faint"} />
-            {apiEnabled ? "LLM 정밀 보정 사용 중" : "API 키 없이 내장 엔진으로 동작"}
+          <button type="button" onClick={onOpenApi} className="flex min-w-0 items-center gap-1 truncate text-[10px] text-muted hover:text-ink" data-testid="input-ai-mode">
+            <Sparkles size={10} className={live ? "text-accent" : "text-faint"} />
+            {live ? `실시간 AI 분석 · ${aiStatus.model ?? "gpt-4o-mini"}` : "규칙 엔진 (AI 미연결)"}
           </button>
           <span className="flex shrink-0 items-center gap-1 text-[9.5px] text-faint">
             <Kbd>⌘</Kbd>

@@ -1,4 +1,5 @@
 import type { JobPackage } from "../types";
+import { buildLocalIntro, buildLocalReverse, speakingSeconds } from "../lib/coach";
 
 const dateText = (iso: string) => {
   const d = new Date(iso);
@@ -8,7 +9,10 @@ const dateText = (iso: string) => {
 export function PrintSheet({ pkg }: { pkg: JobPackage }) {
   const adopted = pkg.rewrites.filter((r) => r.adopted);
   const gaps = pkg.match.keywords.filter((k) => k.status !== "matched");
-  const questions = pkg.questions.slice(0, 10);
+  const questions = pkg.questions.slice(0, 8);
+  const intro = pkg.intro ?? buildLocalIntro(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match);
+  const reverse = (pkg.reverse ?? buildLocalReverse(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match)).slice(0, 3);
+  const feedback = (pkg.feedback ?? []).slice(0, 2);
 
   return (
     <div className="print-sheet" style={{ fontSize: 9.8, lineHeight: 1.5 }}>
@@ -27,6 +31,7 @@ export function PrintSheet({ pkg }: { pkg: JobPackage }) {
           <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1 }}>{pkg.match.score}</div>
           <div style={{ fontSize: 9, color: "#555" }}>/100 · {pkg.match.grade.label}</div>
           <div style={{ fontSize: 8.5, color: "#777" }}>{dateText(pkg.createdAt)}</div>
+          <div style={{ fontSize: 8, color: "#888" }}>{pkg.engine === "ai" ? `AI 분석${pkg.aiModel ? ` · ${pkg.aiModel}` : ""}` : "규칙 엔진"}</div>
         </div>
       </div>
 
@@ -40,10 +45,21 @@ export function PrintSheet({ pkg }: { pkg: JobPackage }) {
         ))}
       </div>
 
-      <h2 style={{ fontSize: 11, margin: "14px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>지원 요약</h2>
-      <p style={{ margin: 0 }}>{pkg.summary.adopted ? pkg.summary.after : pkg.summary.before}</p>
+      <h2 style={{ fontSize: 11, margin: "14px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>
+        1분 자기소개 <span style={{ fontWeight: 400, fontSize: 8.5, color: "#777" }}>({intro.text.replace(/\s+/g, "").length}자 · 약 {speakingSeconds(intro.text)}초)</span>
+      </h2>
+      <p style={{ margin: 0, wordBreak: "keep-all" }}>{intro.text}</p>
 
-      <h2 style={{ fontSize: 11, margin: "12px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>30초 자기소개 · 핵심 어필</h2>
+      <h2 style={{ fontSize: 11, margin: "12px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>마지막 역질문</h2>
+      <ol style={{ margin: 0, paddingLeft: 16 }}>
+        {reverse.map((item) => (
+          <li key={item.id} style={{ marginBottom: 2.5 }}>
+            {item.question}
+          </li>
+        ))}
+      </ol>
+
+      <h2 style={{ fontSize: 11, margin: "12px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>핵심 어필</h2>
       <ol style={{ margin: 0, paddingLeft: 16 }}>
         {pkg.appeals.map((appeal) => (
           <li key={appeal.id} style={{ marginBottom: 4 }}>
@@ -92,6 +108,21 @@ export function PrintSheet({ pkg }: { pkg: JobPackage }) {
           </li>
         ))}
       </ol>
+
+      {feedback.length > 0 && (
+        <>
+          <h2 style={{ fontSize: 11, margin: "12px 0 5px", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>모의면접 피드백</h2>
+          {feedback.map((item) => (
+            <div key={item.id} style={{ marginBottom: 5 }}>
+              <div style={{ fontWeight: 600 }}>
+                {item.score}/100 · {item.seconds}초 · {item.question.slice(0, 60)}
+              </div>
+              <div style={{ fontSize: 9, color: "#444" }}>보완: {item.improvements.slice(0, 2).join(" / ")}</div>
+              <div style={{ fontSize: 9, color: "#444" }}>꼬리질문: {item.followUp}</div>
+            </div>
+          ))}
+        </>
+      )}
 
       <div style={{ marginTop: 14, borderTop: "1px solid #ddd", paddingTop: 6, fontSize: 8, color: "#888" }}>
         JobFit Studio로 생성한 참고 자료입니다. 모든 인물·기업 예시는 가상이며, 지원 전 사실관계와 수치를 다시 확인하세요.

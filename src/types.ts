@@ -174,6 +174,56 @@ export interface InterviewQuestion {
   hint: string;
 }
 
+/** 생성 주체. 규칙 엔진만으로 만든 결과와 AI가 만든 결과를 화면에서 구분합니다. */
+export type EngineKind = "rule" | "ai";
+
+export interface IntroOutline {
+  hook: string;
+  proof: string;
+  fit: string;
+  close: string;
+}
+
+export interface IntroPitch {
+  text: string;
+  source: EngineKind;
+  model?: string;
+  outline?: IntroOutline;
+}
+
+export type ReverseTone = "성과 기준" | "갭 확인" | "조직 적합";
+
+export interface ReverseQuestion {
+  id: string;
+  question: string;
+  intent: string;
+  tone: ReverseTone;
+  source: EngineKind;
+}
+
+export interface InterviewFeedback {
+  id: string;
+  questionId: string;
+  question: string;
+  answer: string;
+  strengths: string[];
+  improvements: string[];
+  followUp: string;
+  followUpWhy: string;
+  score: number;
+  seconds: number;
+  source: EngineKind;
+  model?: string;
+  createdAt: string;
+}
+
+export interface AiFit {
+  verdict: string;
+  strengths: { label: string; why: string }[];
+  gaps: { label: string; how: string }[];
+  model?: string;
+}
+
 export interface JobPackage {
   id: string;
   createdAt: string;
@@ -184,7 +234,7 @@ export interface JobPackage {
   resumeName: string;
   resumeHeadline: string;
   years: number;
-  engine: "heuristic" | "llm";
+  engine: EngineKind;
   match: MatchResult;
   summary: SummaryRewrite;
   rewrites: RewriteItem[];
@@ -193,14 +243,57 @@ export interface JobPackage {
   jobKeywords: string[];
   resumeSnapshot: MasterResume;
   jobSnapshot: JobPosting;
+  /* ── 실전 AI 확장 ── */
+  intro?: IntroPitch;
+  reverse?: ReverseQuestion[];
+  feedback?: InterviewFeedback[];
+  aiFit?: AiFit;
+  aiModel?: string;
+  aiWarnings?: string[];
 }
 
-export interface LlmConfig {
-  provider: "openai" | "anthropic";
+export interface AiConfig {
+  /** 서버 환경변수가 없을 때만 요청 본문에 실어 보내는 개인 키 */
   apiKey: string;
   model: string;
-  enabled: boolean;
+  sendKey: boolean;
 }
 
-export type TabId = "match" | "rewrite" | "interview" | "export";
+export type AiStatusKind = "checking" | "live" | "local";
+
+export interface AiStatus {
+  kind: AiStatusKind;
+  reachable: boolean;
+  model?: string;
+  reason?: string;
+  message: string;
+  checkedAt: string;
+}
+
+export type Stage = "준비중" | "서류" | "1차" | "2차" | "최종" | "오퍼";
+
+export interface NegotiationItem {
+  id: string;
+  label: string;
+  done: boolean;
+}
+
+export interface ApplicationEntry {
+  id: string;
+  company: string;
+  role: string;
+  stage: Stage;
+  packageId: string | null;
+  score: number | null;
+  deadline: string;
+  nextAction: string;
+  /** 만원 단위 */
+  salary: { current: number | null; hope: number | null; offered: number | null };
+  negotiation: NegotiationItem[];
+  memo: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TabId = "match" | "rewrite" | "interview" | "pitch" | "export";
 export type ViewId = "studio" | "history" | "tracker";

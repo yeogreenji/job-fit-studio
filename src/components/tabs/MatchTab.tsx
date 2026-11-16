@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { ChevronRight, Info, Lightbulb, Sparkles } from "lucide-react";
-import type { JobPosting, MatchResult } from "../../types";
+import { ArrowRight, Check, ChevronRight, Info, Lightbulb, Sparkles } from "lucide-react";
+import type { AiFit, JobPosting, MatchResult } from "../../types";
 import { Card, ScoreRing, StatusChip, Meter, cx, SectionHead, Eyebrow } from "../ui";
 
 const STATUS_LABEL = { matched: "매칭", weak: "보완", missing: "미충족" } as const;
@@ -20,7 +20,7 @@ function Suggestion({ status, label }: { status: "matched" | "weak" | "missing";
   );
 }
 
-export function MatchTab({ match, job }: { match: MatchResult; job: JobPosting }) {
+export function MatchTab({ match, job, aiFit }: { match: MatchResult; job: JobPosting; aiFit?: AiFit }) {
   const [filter, setFilter] = useState<"all" | "matched" | "weak" | "missing">("all");
   const [openId, setOpenId] = useState<string | null>(match.keywords[0]?.id ?? null);
 
@@ -30,6 +30,50 @@ export function MatchTab({ match, job }: { match: MatchResult; job: JobPosting }
 
   return (
     <div className="space-y-3">
+      {aiFit && (
+        <Card className="overflow-hidden" testId="ai-fit">
+          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+            <Sparkles size={13} className="text-accent" />
+            <span className="text-[12px] font-semibold">AI 진단</span>
+            <span className="chip bg-accent-soft px-1.5 py-0.5 text-[9px] text-accent-deep">{aiFit.model ?? "gpt-4o-mini"}</span>
+            <span className="ml-auto text-[9.5px] text-faint">원문에 없는 수치·회사는 제외하고 표시합니다</span>
+          </div>
+          <div className="px-4 py-3">
+            <p className="text-[12px] leading-relaxed text-ink-2">{aiFit.verdict}</p>
+            <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
+              <div>
+                <div className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-ok">맞는 부분</div>
+                <ul className="mt-1 space-y-1">
+                  {aiFit.strengths.map((item) => (
+                    <li key={item.label} className="flex items-start gap-1.5 text-[10.5px] leading-relaxed text-ink-2">
+                      <Check size={10} className="mt-0.5 shrink-0 text-ok" />
+                      <span>
+                        <span className="font-semibold">{item.label}</span> — {item.why}
+                      </span>
+                    </li>
+                  ))}
+                  {aiFit.strengths.length === 0 && <li className="text-[10px] text-faint">표시할 근거를 찾지 못했습니다.</li>}
+                </ul>
+              </div>
+              <div>
+                <div className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-warn">보완할 부분</div>
+                <ul className="mt-1 space-y-1">
+                  {aiFit.gaps.map((item) => (
+                    <li key={item.label} className="flex items-start gap-1.5 text-[10.5px] leading-relaxed text-ink-2">
+                      <ArrowRight size={10} className="mt-0.5 shrink-0 text-warn" />
+                      <span>
+                        <span className="font-semibold">{item.label}</span> — {item.how}
+                      </span>
+                    </li>
+                  ))}
+                  {aiFit.gaps.length === 0 && <li className="text-[10px] text-faint">표시할 갭을 찾지 못했습니다.</li>}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </Card>
+      )}
+
       <div className="grid gap-3 xl:grid-cols-[340px_minmax(0,1fr)]">
         <Card className="p-4">
           <SectionHead eyebrow="Fit score" title="적합도 진단" desc={`${job.company || "지원 기업"} · ${job.role || "직무"}`} />
