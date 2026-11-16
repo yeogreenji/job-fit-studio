@@ -12,7 +12,7 @@
  * 개인정보: 키와 입력은 저장하지 않습니다.
  */
 
-import { UrlError, excerptOf, fetchJobPage, structureFromPage, type ExtractedJob, type FetchedPage } from "./_joburl";
+import { UrlError, excerptOf, fetchJobPage, structureFromPage, type ExtractedJob, type FetchedPage } from "./_joburl.js";
 
 type HeaderValue = string | string[] | undefined;
 
