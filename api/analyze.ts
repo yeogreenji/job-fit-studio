@@ -4,7 +4,9 @@
  * POST /api/analyze  { mode: "package" | "interview_eval", ... }
  * GET  /api/analyze  서버·키 상태 확인 (앱이 모드 배너를 정할 때 사용)
  *
- * 키 우선순위: process.env.OPENAI_API_KEY → 요청 본문 apiKey → 501 no_key
+ * 키 우선순위: process.env.GEMINI_API_KEY → process.env.OPENAI_API_KEY → 요청 본문 apiKey(비 sk-…=Gemini / sk-…=OpenAI) → 501 no_key
+ *   두 서버 키가 다 있으면 Gemini를 씁니다. 개인 키는 앞자리로 제공자를 가립니다.
+ *   Gemini는 generationConfig.responseMimeType: application/json 으로 같은 구조화 JSON을 받습니다.
  * 정직성 원칙: 지원자 원문에 없는 경험·수치·회사를 만들지 않도록 프롬프트에서 제한하고,
  *              클라이언트가 한 번 더 검증합니다(src/lib/guard.ts).
  * 개인정보: 키와 입력은 저장하지 않습니다.
@@ -27,12 +29,21 @@ interface ApiResponse {
 }
 
 const SERVICE = "jobfit-analyze";
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const DEFAULT_MODEL = "gpt-4o-mini";
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]);
 const MAX_BODY_CHARS = 60_000;
 const FIELD_LIMIT = 3_500;
 const ANSWER_LIMIT = 3_000;
+
+type Provider = "gemini" | "openai";
+
+/**
+ * 개인 키는 앞자리로 제공자를 가립니다. OpenAI 키만 sk- 로 시작하고,
+ * Gemini 키는 AIza… 또는 AQ.… 등으로 발급되므로 "sk-가 아니면 Gemini"로 봅니다.
+ */
+const isGeminiKey = (key: string): boolean => key.length > 0 && !key.startsWith("sk-");
 
 const env = (): Record<string, string | undefined> =>
   (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env ?? {};
@@ -258,10 +269,10 @@ interface CompletionResult {
   model: string;
 }
 
-async function callOpenAI(input: { apiKey: string; model: string; system: string; user: string; maxTokens: number }): Promise<CompletionResult> {
+async function callOpenAI(input: CompletionInput): Promise<CompletionResult> {
   const base = (env().OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45_000);
+  const timer = setTimeout(() => controller.abort(), 50_000);
   try {
     const response = await fetch(`${base}/chat/completions`, {
       method: "POST",
@@ -298,6 +309,92 @@ async function callOpenAI(input: { apiKey: string; model: string; system: string
   }
 }
 
+interface CompletionInput {
+  apiKey: string;
+  model: string;
+  system: string;
+  user: string;
+  maxTokens: number;
+}
+
+interface GeminiPayload {
+  candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+  modelVersion?: string;
+}
+
+/** Google Gemini REST(generateContent)로 같은 구조화 JSON을 받습니다. */
+async function callGemini(input: CompletionInput): Promise<CompletionResult> {
+  const base = (env().GEMINI_BASE_URL || "https://generativelanguage.googleapis.com").replace(/\/+$/, "");
+  const url = `${base}/v1beta/models/${encodeURIComponent(input.model)}:generateContent?key=${encodeURIComponent(input.apiKey)}`;
+  const generationConfig: Record<string, unknown> = {
+    responseMimeType: "application/json",
+    temperature: 0.4,
+  };
+  if (/^gemini-3\./.test(input.model)) {
+    // Gemini 3.x는 thinking을 끌 수 없고 thinking 토큰이 maxOutputTokens에 포함됩니다.
+    // 잘린 JSON을 받지 않도록 한도만 넓히고, thinkingConfig는 보내지 않습니다(모델별 지원 편차).
+    generationConfig.maxOutputTokens = Math.min(65_536, input.maxTokens * 3 + 1_024);
+  } else {
+    generationConfig.maxOutputTokens = input.maxTokens;
+    // 2.5 Flash는 thinkingBudget 0으로 추론을 끌 수 있습니다(2.5 Flash-Lite는 기본 꺼짐).
+    if (/^gemini-2\.5-flash(?!-lite)/.test(input.model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 50_000);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: input.system }] },
+        contents: [{ role: "user", parts: [{ text: input.user }] }],
+        generationConfig,
+      }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      let detail = text.slice(0, 160);
+      try {
+        const payload = JSON.parse(text) as { error?: { message?: string } };
+        detail = payload.error?.message?.slice(0, 180) ?? detail;
+      } catch {
+        /* 원문 유지 */
+      }
+      // Gemini는 잘못된 키를 400·403으로, 못 쓰는 모델을 404로 돌려줍니다.
+      // 앱에서는 각각 인증 오류·제공자 오류로 묶어 안내합니다.
+      const unavailable = response.status === 404;
+      const status = unavailable
+        ? 502
+        : response.status === 400 || response.status === 401 || response.status === 403
+          ? 401
+          : response.status;
+      const message = unavailable
+        ? `Gemini 모델(${input.model})을 사용할 수 없습니다. GEMINI_MODEL을 확인하세요. ${detail}`.trim()
+        : detail || `HTTP ${response.status}`;
+      throw Object.assign(new Error(message), { status });
+    }
+    const payload = JSON.parse(text) as GeminiPayload;
+    const content = (payload.candidates?.[0]?.content?.parts ?? [])
+      .filter((part) => part.thought !== true)
+      .map((part) => part.text ?? "")
+      .join("")
+      .trim();
+    if (!content) {
+      const reason = payload.candidates?.[0]?.finishReason;
+      throw Object.assign(new Error(reason ? `Gemini가 응답을 만들지 못했습니다 (${reason})` : "빈 응답"), { status: 502 });
+    }
+    return { content, model: payload.modelVersion || input.model };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const callCompletion = (input: CompletionInput & { provider: Provider }): Promise<CompletionResult> =>
+  input.provider === "gemini" ? callGemini(input) : callOpenAI(input);
+
 function parseJsonContent(content: string): Record<string, unknown> | null {
   const cleaned = content
     .replace(/^\s*```(?:json)?/i, "")
@@ -328,17 +425,21 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
-  const envKey = env().OPENAI_API_KEY?.trim() ?? "";
-  const model = env().OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  const geminiEnvKey = env().GEMINI_API_KEY?.trim() ?? "";
+  const openaiEnvKey = env().OPENAI_API_KEY?.trim() ?? "";
+  const geminiConfigModel = env().GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
+  const openaiConfigModel = env().OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  const envProvider: Provider | null = geminiEnvKey ? "gemini" : openaiEnvKey ? "openai" : null;
 
   if (method === "GET") {
     send(res, 200, {
       ok: true,
       service: SERVICE,
       version: VERSION,
-      ai: Boolean(envKey),
-      model,
-      reason: envKey ? undefined : "no_key",
+      ai: Boolean(envProvider),
+      provider: envProvider,
+      model: envProvider === "gemini" ? geminiConfigModel : openaiConfigModel,
+      reason: envProvider ? undefined : "no_key",
       modes: ["package", "interview_eval"],
     });
     return;
@@ -362,17 +463,31 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   }
 
   const requestKey = str(body.apiKey, 200);
-  if (requestKey && !/^sk-[A-Za-z0-9\-_*.]{10,}$/.test(requestKey)) {
+  // sk-…는 OpenAI, 그 외(AIza…·AQ.… 등 Gemini 키)는 최소 길이와 문자만 확인합니다.
+  const keyShapeOk =
+    !requestKey || /^sk-[A-Za-z0-9\-_*.]{10,}$/.test(requestKey) || /^[A-Za-z0-9._\-]{10,}$/.test(requestKey);
+  if (!keyShapeOk) {
     fail(res, 400, "bad_key", "API 키 형식이 올바르지 않습니다.");
     return;
   }
-  const apiKey = envKey || requestKey;
-  if (!apiKey) {
-    fail(res, 501, "no_key", "서버에 OPENAI_API_KEY가 없고 요청에도 키가 없습니다.");
+  // 서버 키가 1순위. 서버 키가 없을 때만 요청의 개인 키를 쓰고, 앞자리로 제공자를 가립니다.
+  const geminiKey = geminiEnvKey || (requestKey && isGeminiKey(requestKey) ? requestKey : "");
+  const openaiKey = openaiEnvKey || (requestKey && !isGeminiKey(requestKey) ? requestKey : "");
+  const provider: Provider | null = geminiKey ? "gemini" : openaiKey ? "openai" : null;
+  const apiKey = geminiKey || openaiKey;
+  if (!provider) {
+    fail(res, 501, "no_key", "서버에 GEMINI_API_KEY나 OPENAI_API_KEY가 없고 요청에도 키가 없습니다.");
     return;
   }
   const requestedModel = str(body.model, 40);
-  const useModel = ALLOWED_MODELS.has(requestedModel) ? requestedModel : model;
+  const useModel =
+    provider === "gemini"
+      ? /^gemini-[a-z0-9.\-]{2,}$/i.test(requestedModel)
+        ? requestedModel
+        : geminiConfigModel
+      : ALLOWED_MODELS.has(requestedModel)
+        ? requestedModel
+        : openaiConfigModel;
 
   try {
     if (mode === "package") {
@@ -386,7 +501,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         fail(res, 400, "bad_resume", "경력 문장이 한 개 이상 필요합니다.");
         return;
       }
-      const completion = await callOpenAI({
+      const completion = await callCompletion({
+        provider,
         apiKey,
         model: useModel,
         system: PACKAGE_SYSTEM,
@@ -398,7 +514,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         fail(res, 502, "bad_json", "AI 응답을 JSON으로 읽지 못했습니다.");
         return;
       }
-      send(res, 200, { ok: true, mode, model: completion.model, data });
+      send(res, 200, { ok: true, mode, provider, model: completion.model, data });
       return;
     }
 
@@ -412,7 +528,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       fail(res, 400, "bad_answer", "답변이 너무 짧습니다.");
       return;
     }
-    const completion = await callOpenAI({
+    const completion = await callCompletion({
+      provider,
       apiKey,
       model: useModel,
       system: EVAL_SYSTEM,
@@ -424,7 +541,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       fail(res, 502, "bad_json", "AI 응답을 JSON으로 읽지 못했습니다.");
       return;
     }
-    send(res, 200, { ok: true, mode, model: completion.model, data });
+    send(res, 200, { ok: true, mode, provider, model: completion.model, data });
   } catch (error) {
     const status = (error as { status?: number }).status ?? 502;
     const message = error instanceof Error ? error.message : "알 수 없는 오류";

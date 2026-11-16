@@ -3,7 +3,7 @@ import type { AiStatus } from "../types";
 import { cx } from "./ui";
 
 const REASON_LABEL: Record<string, string> = {
-  no_key: "서버에 OPENAI_API_KEY가 없습니다",
+  no_key: "서버에 GEMINI_API_KEY/OPENAI_API_KEY가 없습니다",
   server_unavailable: "AI 서버(/api/analyze)에 연결되지 않았습니다",
   timeout: "AI 응답 시간이 초과됐습니다",
   upstream: "AI 제공자 응답에 문제가 있었습니다",

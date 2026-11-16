@@ -84,19 +84,32 @@ export function AiSettingsModal({
             <ol className="mt-1.5 space-y-1 text-[10.5px] leading-relaxed text-muted">
               <li>1. Vercel 프로젝트 → Settings → Environment Variables</li>
               <li>
-                2. <code className="rounded bg-paper-deep px-1 font-mono text-[10px]">OPENAI_API_KEY</code> 에 발급한 키 입력 (선택:{" "}
+                2.{" "}
+                <code className="rounded bg-paper-deep px-1 font-mono text-[10px]">GEMINI_API_KEY</code> (권장, 무료 키) 또는{" "}
+                <code className="rounded bg-paper-deep px-1 font-mono text-[10px]">OPENAI_API_KEY</code> 에 발급한 키 입력 (선택:{" "}
+                <code className="rounded bg-paper-deep px-1 font-mono text-[10px]">GEMINI_MODEL</code>·{" "}
                 <code className="rounded bg-paper-deep px-1 font-mono text-[10px]">OPENAI_MODEL</code>)
               </li>
               <li>3. 재배포하면 이 화면의 상태가 ‘실시간 AI 분석’으로 바뀝니다.</li>
             </ol>
-            <a
-              href="https://platform.openai.com/api-keys"
-              target="_blank"
-              rel="noreferrer"
-              className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline"
-            >
-              OpenAI 키 발급 페이지 <ExternalLink size={9} />
-            </a>
+            <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+              <a
+                href="https://aistudio.google.com/apikey"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline"
+              >
+                Gemini 키 발급 페이지 <ExternalLink size={9} />
+              </a>
+              <a
+                href="https://platform.openai.com/api-keys"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-accent hover:underline"
+              >
+                OpenAI 키 발급 페이지 <ExternalLink size={9} />
+              </a>
+            </div>
           </div>
 
           <div>
@@ -111,7 +124,7 @@ export function AiSettingsModal({
               type={showKey ? "text" : "password"}
               value={draft.apiKey}
               onChange={(event) => setDraft({ ...draft, apiKey: event.target.value, sendKey: event.target.value.trim().length > 0 })}
-              placeholder="sk-... (서버 키가 없을 때만 사용)"
+              placeholder="sk-... 또는 Gemini 키(AQ.... / AIza...)"
               autoComplete="off"
               data-testid="ai-key-input"
             />
@@ -124,13 +137,13 @@ export function AiSettingsModal({
           <div>
             <div className="mb-1.5 text-[10.5px] font-semibold text-muted">모델</div>
             <input className="field" value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="gpt-4o-mini" />
-            <p className="mt-1 text-[9.5px] text-faint">허용: gpt-4o-mini · gpt-4o · gpt-4.1-mini · gpt-4.1 (그 외 값은 서버 기본값 사용)</p>
+            <p className="mt-1 text-[9.5px] text-faint">허용: gpt-4o-mini · gpt-4o · gpt-4.1-mini · gpt-4.1, Gemini는 gemini-3.5-flash-lite 등 (그 외 값은 서버 기본값 사용)</p>
           </div>
 
           <div className="flex items-center justify-between rounded-lg border border-line bg-[#fcfcf9] px-3 py-2.5">
             <div>
               <div className="text-[11px] font-medium text-ink">개인 키를 요청에 실어 보내기</div>
-              <div className="text-[9.5px] text-faint">서버 환경변수가 있으면 서버 키가 우선입니다</div>
+              <div className="text-[9.5px] text-faint">서버 환경변수(GEMINI_API_KEY·OPENAI_API_KEY)가 있으면 서버 키가 우선입니다</div>
             </div>
             <Toggle
               checked={draft.sendKey && draft.apiKey.trim().length > 0}

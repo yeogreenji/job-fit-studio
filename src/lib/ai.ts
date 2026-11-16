@@ -13,7 +13,7 @@ export type AiErrorCode =
 
 const MESSAGES: Record<AiErrorCode, string> = {
   server_unavailable: "AI 서버에 연결하지 못했습니다",
-  no_key: "AI 서버에 OPENAI_API_KEY가 설정되지 않았습니다",
+  no_key: "AI 서버에 GEMINI_API_KEY 또는 OPENAI_API_KEY가 설정되지 않았습니다",
   timeout: "AI 응답이 시간 안에 오지 않았습니다",
   too_large: "입력이 너무 길어 AI로 보내지 못했습니다",
   rate_limit: "AI 호출 한도에 걸렸습니다",
@@ -220,5 +220,5 @@ export async function requestAiEvaluation(input: EvalRequestInput): Promise<{ mo
       })),
     },
   };
-  return post<AiEvalData>(body, 45000);
+  return post<AiEvalData>(body, 60000);
 }

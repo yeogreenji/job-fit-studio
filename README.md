@@ -63,14 +63,16 @@
 
 ```
 api/analyze.ts      POST /api/analyze (mode: package | interview_eval), GET /api/analyze (상태 프로브)
-vercel.json         build: npm run build → dist, functions.maxDuration 45s
+vercel.json         build: npm run build → dist, functions.maxDuration 60s
 ```
 
 ### 환경변수
 
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | 배포 시 권장 | 서버에서만 사용. 브라우저로 내려가지 않습니다. |
+| `GEMINI_API_KEY` | 배포 시 권장 | Google AI Studio 키(`AQ.…` 또는 `AIza…`). 서버에서만 사용. |
+| `GEMINI_MODEL` | 선택 | 기본 `gemini-3.5-flash-lite`(실측 2.2초 응답). 신규 키는 `gemini-2.5-flash`가 404, `gemini-3.8-flash`는 thinking으로 15~25초 걸려 타임아웃 위험이 있습니다. 요청 `model`이 `gemini-…`이면 그 값을 우선합니다. |
+| `OPENAI_API_KEY` | 선택 | Gemini 키가 없을 때 상용 OpenAI 경로. 서버에서만 사용. |
 | `OPENAI_MODEL` | 선택 | 기본 `gpt-4o-mini`. 허용: `gpt-4o-mini`, `gpt-4o`, `gpt-4.1-mini`, `gpt-4.1` |
 | `OPENAI_BASE_URL` | 선택 | 프록시/게이트웨이를 쓸 때만 (`https://api.openai.com/v1` 기본) |
 
@@ -80,17 +82,17 @@ vercel.json         build: npm run build → dist, functions.maxDuration 45s
 
 ```
 GET  /api/analyze
-→ { ok, service, version, ai: boolean, model, reason?: "no_key", modes: ["package","interview_eval"] }
+→ { ok, service, version, ai: boolean, provider: "gemini"|"openai"|null, model, reason?: "no_key", modes: ["package","interview_eval"] }
 
 POST /api/analyze  { mode:"package", job, resume, match, apiKey?, model? }
-→ { ok, mode, model, data: { fit, intro{text,outline}, appeals[], rewrites[], questions[], reverseQuestions[] } }
+→ { ok, mode, provider, model, data: { fit, intro{text,outline}, appeals[], rewrites[], questions[], reverseQuestions[] } }
 
 POST /api/analyze  { mode:"interview_eval", question, answer, seconds, job?, resume?, apiKey?, model? }
-→ { ok, mode, model, data: { strengths[], improvements[], followUp, followUpWhy, score, verdict } }
+→ { ok, mode, provider, model, data: { strengths[], improvements[], followUp, followUpWhy, score, verdict } }
 ```
 
-- 키 우선순위: `process.env.OPENAI_API_KEY` → 요청 `apiKey` → `501 no_key`
-- JSON 모드(`response_format: json_object`), 본문 60,000자 / 필드 3,500자 / 답변 3,000자 제한
+- 키 우선순위: `process.env.GEMINI_API_KEY` → `process.env.OPENAI_API_KEY` → 요청 `apiKey`(서버 키가 없을 때만, `sk-…`가 아니면 Gemini / `sk-…`는 OpenAI) → `501 no_key`
+- JSON 모드(Gemini `generationConfig.responseMimeType: application/json`, OpenAI `response_format: json_object`), 본문 60,000자 / 필드 3,500자 / 답변 3,000자 제한
 - 오류: `400 bad_mode|bad_job|bad_resume|bad_key|bad_question|bad_answer`, `413 too_large`, `501 no_key`, `502 upstream|bad_json`
 - CORS(`*`, OPTIONS 204) 포함. 입력·키는 저장하지 않습니다.
 
@@ -111,23 +113,23 @@ npm run preview    # 빌드 결과 확인
 
 ```bash
 npm i -g vercel
-vercel dev         # 프로젝트 연결 후 OPENAI_API_KEY 를 .env.local 에 두면 실시간 AI 모드
+vercel dev         # 프로젝트 연결 후 GEMINI_API_KEY(또는 OPENAI_API_KEY)를 .env.local 에 두면 실시간 AI 모드
 ```
 
 ### 테스트
 
 ```bash
-python3 scripts/verify.py    # Playwright E2E (모의 API 서버 3종: 키 있음/키 없음/정적 호스팅)
+python3 scripts/verify.py    # Playwright E2E (모의 API 서버 4종: OpenAI·Gemini·키 없음·정적 호스팅)
 python3 scripts/shots.py     # docs/screenshots 재생성
 ```
 
-`scripts/e2e-server.mjs`가 `dist/`를 서빙하면서 실제 `api/analyze.ts`를 esbuild로 실행하고 OpenAI만 스텁합니다. 테스트 픽스처(`scripts/fixtures/`)는 모두 가상 인물·기업입니다.
+`scripts/e2e-server.mjs`가 `dist/`를 서빙하면서 실제 `api/analyze.ts`를 esbuild로 실행하고 OpenAI·Gemini 두 경로만 스텁합니다. 테스트 픽스처(`scripts/fixtures/`)는 모두 가상 인물·기업입니다.
 
 ---
 
 ## 5. 배포
 
-- **Vercel**: 저장소를 연결하면 `vercel.json` 설정으로 `dist` + `api/analyze.ts`가 함께 배포됩니다. 환경변수 `OPENAI_API_KEY`를 넣고 재배포하면 배너가 ‘실시간 AI 분석’으로 바뀝니다.
+- **Vercel**: 저장소를 연결하면 `vercel.json` 설정으로 `dist` + `api/analyze.ts`가 함께 배포됩니다. 환경변수 `GEMINI_API_KEY`(또는 `OPENAI_API_KEY`)를 넣고 재배포하면 배너가 ‘실시간 AI 분석’으로 바뀝니다.
 - **GitHub Pages**: `.github/workflows/deploy.yml` + `vite.config.ts`의 `GITHUB_ACTIONS` base 분기로 정적 배포도 그대로 지원합니다. 이 경우 `/api/analyze`가 없으므로 자동으로 로컬 규칙 모드로 동작합니다.
 
 ---

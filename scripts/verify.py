@@ -12,6 +12,11 @@ servers = []
 
 
 def start_server(mode, port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            raise RuntimeError(f"port {port} already in use")
+    except OSError:
+        pass
     proc = subprocess.Popen([NODE, "scripts/e2e-server.mjs", mode, str(port)], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     servers.append(proc)
     deadline = time.time() + 40
@@ -83,13 +88,15 @@ def no_overflow(page):
     return page.evaluate("document.documentElement.scrollWidth - window.innerWidth") <= 0
 
 
-AI = "http://127.0.0.1:4183/"
-OFFLINE = "http://127.0.0.1:4184/"
-NOKEY = "http://127.0.0.1:4185/"
+AI = "http://127.0.0.1:4383/"
+OFFLINE = "http://127.0.0.1:4384/"
+NOKEY = "http://127.0.0.1:4385/"
+GEMINI = "http://127.0.0.1:4386/"
 
-start_server("ai", 4183)
-start_server("offline", 4184)
-start_server("nokey", 4185)
+start_server("ai", 4383)
+start_server("offline", 4384)
+start_server("nokey", 4385)
+start_server("gemini", 4386)
 
 
 def api(port, method="GET", payload=None):
@@ -103,28 +110,93 @@ def api(port, method="GET", payload=None):
         return exc.code, json.loads(exc.read().decode() or "{}"), dict(exc.headers)
 
 
-status, body, headers = api(4183)
+status, body, headers = api(4383)
 check("api GET status", status == 200 and body.get("ok") is True and body.get("ai") is True, str(body)[:120])
 check("api CORS header", headers.get("Access-Control-Allow-Origin") == "*", str(headers.get("Access-Control-Allow-Origin")))
-status, body, _ = api(4183, "OPTIONS")
+status, body, _ = api(4383, "OPTIONS")
 check("api OPTIONS 204", status == 204, str(status))
-status, body, _ = api(4183, "POST", {"mode": "nope"})
+status, body, _ = api(4383, "POST", {"mode": "nope"})
 check("api bad mode 400", status == 400 and body["error"]["code"] == "bad_mode", str(body)[:120])
-status, body, _ = api(4183, "POST", {"mode": "package", "job": {"company": "x"}, "resume": {}})
+status, body, _ = api(4383, "POST", {"mode": "package", "job": {"company": "x"}, "resume": {}})
 check("api bad job 400", status == 400 and body["error"]["code"] == "bad_job", str(body)[:120])
-status, body, _ = api(4185, "POST", {"mode": "package", "job": {"responsibilities": "위기 대응"}, "resume": {"experiences": [{"bullets": ["위기 이슈 2건을 대응했습니다."]}]}})
+status, body, _ = api(4385, "POST", {"mode": "package", "job": {"responsibilities": "위기 대응"}, "resume": {"experiences": [{"bullets": ["위기 이슈 2건을 대응했습니다."]}]}})
 check("api no key 501", status == 501 and body["error"]["code"] == "no_key", str(body)[:120])
-status, body, _ = api(4185, "GET")
+status, body, _ = api(4385, "GET")
 check("api no key probe", status == 200 and body.get("ai") is False and body.get("reason") == "no_key", str(body)[:120])
-status, body, _ = api(4185, "POST", {
+status, body, _ = api(4385, "POST", {
     "mode": "package",
     "apiKey": "sk-request-fallback-key-000000",
     "job": {"company": "노바커머스", "role": "매니저", "responsibilities": "위기 대응", "requirements": "경력 4년"},
     "resume": {"experiences": [{"company": "노바커머스", "bullets": ["위기 이슈 2건에 대응해 입장문을 배포했습니다."]}]},
 })
 check("api request key fallback", status == 200 and body.get("ok") is True, f"{status} {str(body)[:100]}")
-status, body, _ = api(4184, "GET")
+status, body, _ = api(4384, "GET")
 check("offline api 404", status == 404, str(status))
+
+# ───────────────────────────── Gemini(GEMINI_API_KEY) 경로 ────────────────────────
+status, body, _ = api(4386)
+gemini_status = (
+    status == 200
+    and body.get("ai") is True
+    and body.get("provider") == "gemini"
+    and body.get("model") == "gemini-3.5-flash-lite"
+)
+check("api gemini status", gemini_status, f"{status} {str(body)[:140]}")
+
+status, body, _ = api(4386, "POST", {
+    "mode": "package",
+    "job": {"company": "노바커머스", "role": "매니저", "responsibilities": "위기 대응", "requirements": "경력 4년"},
+    "resume": {"experiences": [{"company": "노바커머스", "bullets": ["위기 이슈 2건에 대응해 입장문을 배포했습니다."]}]},
+})
+check(
+    "api gemini package 200",
+    status == 200 and body.get("ok") is True and body.get("provider") == "gemini" and bool((body.get("data") or {}).get("fit")),
+    f"{status} {str(body)[:140]}",
+)
+
+capture = {}
+try:
+    with open(os.path.join(ROOT, "scripts/.build/gemini-request.json"), encoding="utf-8") as fp:
+        capture = json.load(fp)
+except (OSError, ValueError):
+    capture = {}
+gen = ((capture.get("body") or {}).get("generationConfig") or {})
+check(
+    "gemini request contract",
+    str(capture.get("model") or "").startswith("gemini-3.5-flash-lite")
+    and gen.get("responseMimeType") == "application/json"
+    and gen.get("temperature") == 0.4
+    # Gemini 3.x는 thinking을 끌 수 없어 출력 한도만 넓히고 thinkingConfig는 보내지 않습니다(2400*3+1024).
+    and gen.get("maxOutputTokens") == 2400 * 3 + 1024
+    and "thinkingConfig" not in gen
+    and bool(((capture.get("body") or {}).get("systemInstruction") or {}).get("parts")),
+    json.dumps({"model": capture.get("model"), "generationConfig": gen}, ensure_ascii=False)[:220],
+)
+
+status, body, _ = api(4386, "POST", {
+    "mode": "interview_eval",
+    "question": "위기 이슈를 어떻게 대응하나요?",
+    "answer": "당시 위기 이슈가 터졌고 제가 먼저 입장문 초안을 작성해 24시간 내 배포했습니다. 이해관계 부서와 문장을 조율했습니다.",
+})
+check("api gemini eval 200", status == 200 and body.get("provider") == "gemini" and bool((body.get("data") or {}).get("score") is not None), f"{status} {str(body)[:140]}")
+
+# 서버 키가 없고 요청 본문 키가 AIza…이면 Gemini로
+status, body, _ = api(4385, "POST", {
+    "mode": "package",
+    "apiKey": "AIza-request-gemini-key-000000",
+    "job": {"company": "노바커머스", "role": "매니저", "responsibilities": "위기 대응", "requirements": "경력 4년"},
+    "resume": {"experiences": [{"company": "노바커머스", "bullets": ["위기 이슈 2건에 대응해 입장문을 배포했습니다."]}]},
+})
+check("api gemini request key fallback", status == 200 and body.get("provider") == "gemini", f"{status} {str(body)[:120]}")
+
+# 최근 Gemini 키는 AQ.로 시작합니다 (sk-가 아니면 Gemini)
+status, body, _ = api(4385, "POST", {
+    "mode": "package",
+    "apiKey": "AQ.real-user-gemini-key-0001",
+    "job": {"company": "노바커머스", "role": "매니저", "responsibilities": "위기 대응", "requirements": "경력 4년"},
+    "resume": {"experiences": [{"company": "노바커머스", "bullets": ["위기 이슈 2건에 대응해 입장문을 배포했습니다."]}]},
+})
+check("api gemini AQ key fallback", status == 200 and body.get("provider") == "gemini", f"{status} {str(body)[:120]}")
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -494,6 +566,27 @@ with sync_playwright() as p:
         ctx4.close()
 
     step("offline hosting", offline_mode)
+
+    # ───────────────────────────── Gemini 서버 키 모드 (UI) ─────────────────────────────
+    def gemini_mode():
+        ctx6 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        p6 = ctx6.new_page()
+        attach(p6, "gemini")
+        p6.goto(GEMINI, wait_until="domcontentloaded")
+        p6.wait_for_timeout(1200)
+        check("gemini banner live", wait_attr(p6, "[data-testid=mode-banner]", "data-mode", "live"))
+        banner = p6.inner_text("[data-testid=mode-banner]")
+        check("gemini banner model", "gemini-3.5-flash-lite" in banner, banner[:100])
+        p6.get_by_role("button", name="이 예시로 생성").first.click()
+        p6.wait_for_selector("text=적합도 진단", timeout=25000)
+        p6.wait_for_timeout(1800)
+        check("gemini AI package", "AI 분석" in p6.inner_text("[data-testid=package-engine]"))
+        p6.get_by_role("button", name="1분 소개").first.click()
+        p6.wait_for_timeout(800)
+        check("gemini intro source", "AI 생성" in p6.inner_text("[data-testid=intro-source]"))
+        ctx6.close()
+
+    step("gemini server key mode", gemini_mode)
 
     # ─────────────────────────────────── 모바일 390px ───────────────────────────────────
     def mobile():

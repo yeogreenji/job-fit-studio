@@ -1,12 +1,13 @@
 /**
  * E2E용 로컬 서버.
  *   node scripts/e2e-server.mjs ai 4183      → dist 정적 파일 + 실제 api/analyze.ts (OpenAI는 스텁)
- *   node scripts/e2e-server.mjs nokey 4185   → 서버는 있지만 OPENAI_API_KEY 없음 (501 no_key)
+ *   node scripts/e2e-server.mjs gemini 4185  → 같은 서버를 GEMINI_API_KEY로 띄우고 Gemini 경로를 스텁
+ *   node scripts/e2e-server.mjs nokey 4185   → 서버는 있지만 키 없음 (501 no_key)
  *   node scripts/e2e-server.mjs offline 4184 → 정적 파일만 (AI 서버 없음)
  */
 import http from "node:http";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
@@ -127,6 +128,32 @@ function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
 }
 
+/** Gemini 모의 응답: 마지막 요청 본문을 남겨 generationConfig 계약을 검증할 수 있게 합니다. */
+async function geminiResponse(url, init = {}) {
+  const target = String(url);
+  const key = new URL(target).searchParams.get("key") ?? "";
+  // Gemini 키는 AIza…·AQ.… 등으로 발급됩니다. OpenAI 키(sk-)나 빈 값만 거부합니다.
+  if (!key || key.startsWith("sk-")) {
+    return jsonResponse({ error: { message: "API key not valid. Please pass a valid API key." } }, 400);
+  }
+  const body = JSON.parse(init.body ?? "{}");
+  const model = decodeURIComponent((target.split("/models/")[1] || "").split(":")[0]);
+  try {
+    await mkdir(path.join(here, ".build"), { recursive: true });
+    await writeFile(path.join(here, ".build", "gemini-request.json"), JSON.stringify({ model, body }, null, 2), "utf-8");
+  } catch {
+    /* 캡처 실패는 무시 */
+  }
+  const system = body.systemInstruction?.parts?.[0]?.text ?? "";
+  const user = body.contents?.[0]?.parts?.[0]?.text ?? "";
+  const data = system.includes("JOBFIT_EVAL") ? evalPayload(user) : packagePayload(user);
+  return jsonResponse({
+    candidates: [{ content: { parts: [{ text: JSON.stringify(data) }], role: "model" }, finishReason: "STOP" }],
+    usageMetadata: { promptTokenCount: 1200, candidatesTokenCount: 900, totalTokenCount: 2100 },
+    modelVersion: model,
+  });
+}
+
 async function boot() {
   let handler = null;
   if (mode !== "offline") {
@@ -143,6 +170,7 @@ async function boot() {
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
       const target = String(url);
+      if (target.includes(":generateContent")) return geminiResponse(url, init);
       if (!target.includes("/chat/completions")) return realFetch(url, init);
       const body = JSON.parse(init.body ?? "{}");
       const system = body.messages?.[0]?.content ?? "";
@@ -151,9 +179,18 @@ async function boot() {
       const data = system.includes("JOBFIT_EVAL") ? evalPayload(user) : packagePayload(user);
       return jsonResponse({ model: body.model ?? "gpt-4o-mini", choices: [{ message: { content: JSON.stringify(data) } }] });
     };
-    if (mode === "ai") process.env.OPENAI_API_KEY = "sk-test-jobfit-mock-0000000000";
-    else delete process.env.OPENAI_API_KEY;
+    if (mode === "ai") {
+      process.env.OPENAI_API_KEY = "sk-test-jobfit-mock-0000000000";
+    } else if (mode === "gemini") {
+      process.env.GEMINI_API_KEY = "AQ-test-jobfit-mock-0000000000";
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      delete process.env.GEMINI_API_KEY;
+      delete process.env.OPENAI_API_KEY;
+    }
     delete process.env.OPENAI_BASE_URL;
+    delete process.env.GEMINI_BASE_URL;
+    delete process.env.GEMINI_MODEL;
     handler = (await import(`${outfile}?ts=${Date.now()}`)).default;
   }
 
