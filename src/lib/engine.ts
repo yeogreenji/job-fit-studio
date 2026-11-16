@@ -332,7 +332,8 @@ export function buildRewrites(resume: MasterResume, match: MatchResult): Rewrite
       const addedItem = [...jdClusters]
         .filter((item) => !META_CLUSTERS.has(item.cluster) && !text.includes(item.label) && item.weightPct >= 55)
         .sort((a, b) => b.weight - a.weight)[0];
-      const after = rewriteText(addedItem ? `[${addedItem.label}] ${text}` : text);
+      // 공고 키워드를 대괄호로 끼워 넣지 않습니다. 문장은 그대로 두고, 어떤 표현을 더할지는 added로 따로 보여 줍니다.
+      const after = rewriteText(text);
       const top = [...jdClusters].sort((a, b) => b.weight - a.weight)[0];
 
       const reason = addedItem

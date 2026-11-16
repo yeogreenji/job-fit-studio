@@ -4,6 +4,7 @@ import type {
   JobPosting,
   MasterResume,
   MatchResult,
+  PriorityId,
   QuestionCategory,
   ReverseQuestion,
   ReverseTone,
@@ -62,7 +63,20 @@ export function rankBullets(resume: MasterResume, match: MatchResult): ScoredBul
  * 규칙 기반 1분 자기소개.
  * 지원자가 쓴 경력 문장만 인용하고, 수치는 원문에 있는 값만 옮깁니다.
  */
-export function buildLocalIntro(resume: MasterResume, job: JobPosting, match: MatchResult, variant = 0): IntroPitch {
+const CLOSE_BY_PRIORITY: Record<PriorityId, (role: string) => string> = {
+  salary: (role) => `${role}에서 성과로 보상받는 자리를 맡아 바로 증명하겠습니다`,
+  balance: (role) => `${role}에서 오래 일할 수 있는 환경인지 함께 확인하고, 꾸준히 성과를 내겠습니다`,
+  growth: (role) => `${role}에서 더 넓은 역할과 기준을 맡아 팀의 방향을 만들겠습니다`,
+  stability: (role) => `${role}에서 조직에 남는 구조와 문서를 만들어 오래 기여하겠습니다`,
+};
+
+export function buildLocalIntro(
+  resume: MasterResume,
+  job: JobPosting,
+  match: MatchResult,
+  variant = 0,
+  priority?: PriorityId,
+): IntroPitch {
   const ranked = rankBullets(resume, match);
   const rotated = ranked.length > 1 && variant > 0 ? [...ranked.slice(variant % ranked.length), ...ranked.slice(0, variant % ranked.length)] : ranked;
   const topKeywords = match.keywords
@@ -83,7 +97,7 @@ export function buildLocalIntro(resume: MasterResume, job: JobPosting, match: Ma
       ? `${companyLabel} ${roleLabel} 공고가 요구한 ${topKeywords.join("·")}는 제가 실제로 해 온 일입니다`
       : `${companyLabel} ${roleLabel}에서 요구하는 업무를 같은 흐름으로 해 왔습니다`,
   );
-  const close = endSentence(`${roleLabel}에서 바로 성과로 증명하겠습니다`);
+  const close = endSentence(priority ? CLOSE_BY_PRIORITY[priority](roleLabel) : `${roleLabel}에서 바로 성과로 증명하겠습니다`);
 
   const text = fitIntroLength({ hook, proofPool, fit, close }, INTRO_MAX);
   const proof = proofPool.slice(0, 3).join(" ");
@@ -118,7 +132,12 @@ function fitIntroLength(parts: { hook: string; proofPool: string[]; fit: string;
 }
 
 /** 규칙 기반 역질문 3개. 공고의 요구·갭·톤에서 뽑습니다. */
-export function buildLocalReverse(resume: MasterResume, job: JobPosting, match: MatchResult): ReverseQuestion[] {
+export function buildLocalReverse(
+  resume: MasterResume,
+  job: JobPosting,
+  match: MatchResult,
+  priority?: PriorityId,
+): ReverseQuestion[] {
   const companyLabel = job.company.trim() || "이 회사";
   const roleLabel = job.role.trim() || "이 자리";
   const firstResponsibility = job.responsibilities
@@ -128,13 +147,22 @@ export function buildLocalReverse(resume: MasterResume, job: JobPosting, match: 
   const gap = match.keywords.find((k) => k.status === "missing") ?? match.keywords.find((k) => k.status === "weak");
   const toneAxis = [...match.tone.axes].sort((a, b) => b.job - a.job)[0];
 
+  const priorityQuestion: Record<PriorityId, string> = {
+    salary: `${roleLabel}의 처우 협의는 보통 어느 단계에서, 어떤 방식으로 진행되나요?`,
+    balance: `팀의 실제 출퇴근·재택 패턴과 야근이 몰리는 시기를 알려 주시겠어요?`,
+    growth: `이 역할의 의사결정 범위와 함께 일하는 팀 구성을 알려 주시겠어요?`,
+    stability: `최근 2년 조직 개편과 이 팀의 자리 변동을 알려 주시겠어요?`,
+  };
+
   const picks: ReverseQuestion[] = [
     {
       id: "rv-rule-1",
       tone: "성과 기준" as ReverseTone,
-      question: firstResponsibility
-        ? `“${firstResponsibility.length > 42 ? `${firstResponsibility.slice(0, 41).trimEnd()}…` : firstResponsibility}” 업무를 맡았을 때, 6개월 뒤 잘하고 있다고 판단하시는 기준은 무엇인가요?`
-        : `${roleLabel}에서 6개월 뒤 잘하고 있다고 판단하시는 기준은 무엇인가요?`,
+      question: priority
+        ? priorityQuestion[priority]
+        : firstResponsibility
+          ? `“${firstResponsibility.length > 42 ? `${firstResponsibility.slice(0, 41).trimEnd()}…` : firstResponsibility}” 업무를 맡았을 때, 6개월 뒤 잘하고 있다고 판단하시는 기준은 무엇인가요?`
+          : `${roleLabel}에서 6개월 뒤 잘하고 있다고 판단하시는 기준은 무엇인가요?`,
       intent: "평가 기준을 먼저 확인하면 입사 후 우선순위를 스스로 정할 수 있고, 면접관에게는 목표 지향으로 읽힙니다.",
       source: "rule",
     },

@@ -1,97 +1,84 @@
-import { ChevronDown, Command, Sparkles, WifiOff } from "lucide-react";
-import type { AiStatusKind, ViewId } from "../types";
+import { CircleHelp, ClipboardList, History, PlugZap, Sparkles, SquarePen } from "lucide-react";
+import type { AiStatus, ViewId } from "../types";
 import { cx } from "./ui";
+
+const NAV: { id: ViewId; label: string; icon: typeof SquarePen }[] = [
+  { id: "studio", label: "스튜디오", icon: SquarePen },
+  { id: "tracker", label: "지원 현황", icon: ClipboardList },
+  { id: "history", label: "히스토리", icon: History },
+];
 
 export function TopBar({
   view,
-  company,
-  role,
-  mode,
-  model,
+  onChangeView,
+  aiStatus,
   onOpenAi,
-  onOpenHistory,
-  onOpenTracker,
-  onOpenGuide,
+  onOpenHelp,
+  hasPackage,
 }: {
   view: ViewId;
-  company: string;
-  role: string;
-  mode: AiStatusKind;
-  model?: string;
+  onChangeView: (view: ViewId) => void;
+  aiStatus: AiStatus;
   onOpenAi: () => void;
-  onOpenHistory: () => void;
-  onOpenTracker: () => void;
-  onOpenGuide: () => void;
+  onOpenHelp: () => void;
+  hasPackage: boolean;
 }) {
-  const live = mode === "live";
+  const live = aiStatus.kind === "live";
   return (
-    <header className="sticky top-0 z-30 border-b border-line/80 bg-paper/85 backdrop-blur-md lg:pl-[68px]">
-      <div className="flex h-14 items-center gap-3 px-4 sm:px-6">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <button
-            type="button"
-            onClick={onOpenGuide}
-            className="flex items-center gap-2 rounded-lg px-1.5 py-1 text-[13px] font-semibold tracking-tight text-ink hover:bg-paper-deep"
-            title="JobFit Studio 소개"
-          >
-            <span className="grid h-5 w-5 place-items-center rounded-[5px] bg-ink text-[9px] font-bold text-white lg:hidden">J</span>
-            <span className="hidden sm:inline">JobFit Studio</span>
-            <span className="sm:hidden">JobFit</span>
-            <ChevronDown size={13} className="text-faint" />
-          </button>
-          <span className="hidden h-4 w-px bg-line-strong sm:block" />
-          <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
-            <button
-              type="button"
-              onClick={view === "history" ? onOpenHistory : onOpenHistory}
-              className={cx("rounded-md px-1.5 py-1 text-[12.5px] transition-colors", view === "history" ? "font-medium text-ink" : "text-muted hover:text-ink")}
-            >
-              {view === "history" ? "패키지 히스토리" : company || "지원 스튜디오"}
-            </button>
-            {view === "studio" && company && (
-              <>
-                <span className="text-[11px] text-faint">/</span>
-                <span className="max-w-[210px] truncate text-[12px] text-muted">{role || "직무 미입력"}</span>
-              </>
-            )}
-            <span className="text-[11px] text-faint">/</span>
-            <button
-              type="button"
-              onClick={onOpenTracker}
-              className={cx("rounded-md px-1.5 py-1 text-[12.5px] transition-colors", view === "tracker" ? "font-medium text-ink" : "text-muted hover:text-ink")}
-            >
-              지원 현황
-            </button>
+    <header className="sticky top-0 z-30 border-b border-line bg-surface/92 backdrop-blur-md">
+      <div className="mx-auto flex h-[52px] w-full max-w-[1180px] items-center gap-2 px-3 sm:px-5">
+        <button type="button" onClick={() => onChangeView("studio")} className="flex items-center gap-1.5" aria-label="JobFit Studio 홈">
+          <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-white">
+            <Sparkles size={14} />
           </span>
-        </div>
+          <span className="hidden flex-col leading-none sm:flex">
+            <span className="text-[12.5px] font-semibold tracking-[-0.02em] text-ink">JobFit Studio</span>
+            <span className="mt-0.5 text-[9px] text-faint">이력서 한 번 · 공고 URL 한 줄</span>
+          </span>
+        </button>
 
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenAi}
+        <nav className="ml-2 flex items-center gap-0.5 overflow-x-auto" aria-label="화면 이동">
+          {NAV.map((item) => {
+            const active = view === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onChangeView(item.id)}
+                data-testid={`nav-${item.id}`}
+                className={cx(
+                  "inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1.5 text-[11.5px] font-semibold transition-colors",
+                  active ? "bg-ink text-white" : "text-muted hover:bg-paper-deep hover:text-ink",
+                )}
+              >
+                <item.icon size={12} />
+                {item.label}
+                {item.id === "tracker" && hasPackage && !active && <span className="h-1 w-1 rounded-full bg-accent" />}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <span
+            data-testid="mode-banner"
+            data-mode={aiStatus.kind}
+            title={aiStatus.message}
             className={cx(
-              "hidden items-center gap-1.5 rounded-full border px-2.5 py-1 md:inline-flex",
-              live ? "border-accent/25 bg-accent-soft text-accent-deep" : "border-warn/25 bg-warn-soft text-warn",
+              "chip hidden text-[9.5px] sm:inline-flex",
+              live ? "bg-accent-soft text-accent-deep" : aiStatus.kind === "checking" ? "bg-paper-deep text-muted" : "bg-paper-deep text-muted",
             )}
-            data-testid="topbar-mode"
           >
-            {live ? <span className="h-1.5 w-1.5 rounded-full bg-accent" /> : <WifiOff size={10} />}
-            <span className="text-[11px] font-medium">{live ? `실시간 AI · ${model ?? "gpt-4o-mini"}` : "규칙 엔진 모드"}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onOpenAi}
-            className={cx("btn h-[30px] gap-1.5 px-2.5 text-[11.5px]", live ? "border border-accent/25 bg-accent-soft text-accent-deep" : "btn-outline")}
-          >
-            <Sparkles size={13} />
-            <span className="hidden sm:inline">{live ? "AI 연결됨" : "AI 연결"}</span>
-            {live && <span className="h-1.5 w-1.5 rounded-full bg-accent" />}
-          </button>
-
-          <span className="hidden items-center gap-1 rounded-md border border-line bg-surface px-2 py-1 text-[10.5px] text-muted lg:inline-flex">
-            <Command size={11} /> Enter
+            <span className={cx("h-1.5 w-1.5 rounded-full", live ? "bg-accent" : "bg-faint")} />
+            {live ? `실시간 AI${aiStatus.model ? ` · ${aiStatus.model}` : ""}` : aiStatus.kind === "checking" ? "AI 확인 중" : "규칙 엔진"}
           </span>
+          <button type="button" onClick={onOpenAi} className="btn btn-ghost h-8 px-2 text-[11px] text-muted" data-testid="open-ai" aria-label="AI 연결 설정">
+            <PlugZap size={13} />
+            <span className="hidden sm:inline">AI 연결</span>
+          </button>
+          <button type="button" onClick={onOpenHelp} className="btn btn-ghost h-8 px-1.5 text-muted" aria-label="사용 안내">
+            <CircleHelp size={14} />
+          </button>
         </div>
       </div>
     </header>

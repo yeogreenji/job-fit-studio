@@ -1,5 +1,5 @@
-import type { AiConfig, ApplicationEntry, JobPackage, MasterResume, NegotiationItem, Stage } from "../types";
-import { DEFAULT_RESUME } from "./presets";
+import type { AiConfig, ApplicationEntry, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
+import { EMPTY_RESUME } from "./presets";
 
 const RESUME_KEY = "jobfit.resume.v1";
 const PACKAGES_KEY = "jobfit.packages.v1";
@@ -23,12 +23,16 @@ export const NEGOTIATION_TEMPLATE: { id: string; label: string }[] = [
 
 export const freshNegotiation = (): NegotiationItem[] => NEGOTIATION_TEMPLATE.map((item) => ({ ...item, done: false }));
 
+/**
+ * 저장된 이력서를 읽습니다. 아직 등록 전이면 빈 이력서를 돌려줍니다.
+ * (예시 이력서는 ‘샘플로 체험’을 눌렀을 때만 들어갑니다 — 처음 화면이 예시처럼 보이지 않게)
+ */
 export function loadResume(): MasterResume {
   try {
     const raw = localStorage.getItem(RESUME_KEY);
-    if (!raw) return DEFAULT_RESUME;
+    if (!raw) return { ...EMPTY_RESUME, experiences: EMPTY_RESUME.experiences.map((exp) => ({ ...exp, bullets: exp.bullets.map((b) => ({ ...b })) })) };
     const parsed = JSON.parse(raw) as MasterResume;
-    if (!parsed || !Array.isArray(parsed.experiences)) return DEFAULT_RESUME;
+    if (!parsed || !Array.isArray(parsed.experiences)) return EMPTY_RESUME;
     return {
       ...parsed,
       skills: Array.isArray(parsed.skills) ? parsed.skills : [],
@@ -39,7 +43,7 @@ export function loadResume(): MasterResume {
       })),
     };
   } catch {
-    return DEFAULT_RESUME;
+    return EMPTY_RESUME;
   }
 }
 
@@ -194,4 +198,80 @@ export function makeEntry(input: { company: string; role: string; stage?: Stage;
     createdAt: now,
     updatedAt: now,
   };
+}
+
+/* ── 이직 우선순위·희망 연봉 (URL·이력서 중심 재설계) ── */
+
+const PREFS_KEY = "jobfit.prefs.v1";
+const RESUME_META_KEY = "jobfit.resume.meta.v1";
+
+export interface Prefs {
+  priority: PriorityId | null;
+  /** 만원 단위 희망 연봉. 입력하지 않았으면 null */
+  targetSalary: number | null;
+}
+
+const DEFAULT_PREFS: Prefs = { priority: "salary", targetSalary: null };
+
+export function loadPrefs(): Prefs {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return DEFAULT_PREFS;
+    const parsed = JSON.parse(raw) as Partial<Prefs>;
+    const valid = ["salary", "balance", "growth", "stability"];
+    return {
+      priority: typeof parsed.priority === "string" && valid.includes(parsed.priority) ? (parsed.priority as PriorityId) : DEFAULT_PREFS.priority,
+      targetSalary:
+        typeof parsed.targetSalary === "number" && Number.isFinite(parsed.targetSalary) && parsed.targetSalary > 0
+          ? Math.round(parsed.targetSalary)
+          : null,
+    };
+  } catch {
+    return DEFAULT_PREFS;
+  }
+}
+
+export function persistPrefs(prefs: Prefs) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  } catch {
+    /* ignore */
+  }
+}
+
+export interface ResumeMeta {
+  /** 이력서를 어떻게 등록했는지 */
+  source: "file" | "manual" | "sample" | "none";
+  fileName?: string;
+  savedAt: string;
+  /** PDF에서 뽑은 글자 수 등 참고 정보 */
+  note?: string;
+}
+
+export function loadResumeMeta(): ResumeMeta | null {
+  try {
+    const raw = localStorage.getItem(RESUME_META_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ResumeMeta;
+    return parsed && typeof parsed.savedAt === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function persistResumeMeta(meta: ResumeMeta) {
+  try {
+    localStorage.setItem(RESUME_META_KEY, JSON.stringify(meta));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 저장된 이력서가 실제로 쓸 수 있는 상태인지 (경력 문장 1개 이상) */
+export function resumeReady(resume: MasterResume): boolean {
+  return resume.experiences.some((exp) => exp.bullets.some((bullet) => bullet.text.trim().length > 5));
+}
+
+export function resumeBulletCount(resume: MasterResume): number {
+  return resume.experiences.reduce((sum, exp) => sum + exp.bullets.filter((bullet) => bullet.text.trim().length > 5).length, 0);
 }

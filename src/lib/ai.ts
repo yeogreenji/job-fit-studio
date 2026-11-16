@@ -121,19 +121,23 @@ export interface PackageRequestInput {
   resume: MasterResume;
   match: MatchResult;
   config: AiConfig;
+  priorityLabel?: string;
+  targetSalary?: number | null;
 }
 
 export interface AiPackageData {
   fit?: {
     verdict?: string;
+    onePoint?: { title?: string; body?: string };
     strengths?: { label?: string; why?: string }[];
     gaps?: { label?: string; how?: string }[];
   };
   intro?: { text?: string; outline?: { hook?: string; proof?: string; fit?: string; close?: string } };
   appeals?: { title?: string; body?: string; evidence?: string }[];
   rewrites?: { before?: string; after?: string; reason?: string }[];
-  questions?: { question?: string; why?: string; category?: string; difficulty?: number }[];
+  questions?: { question?: string; why?: string; category?: string; difficulty?: number; answer?: string; avoid?: string }[];
   reverseQuestions?: { question?: string; intent?: string; tone?: string }[];
+  negotiation?: { opener?: string; counter?: string; nonSalary?: string[]; questions?: string[] };
 }
 
 export async function requestAiPackage(input: PackageRequestInput): Promise<{ model?: string; data: AiPackageData }> {
@@ -142,6 +146,8 @@ export async function requestAiPackage(input: PackageRequestInput): Promise<{ mo
     mode: "package" as const,
     apiKey: keyOf(config),
     model: config.model || undefined,
+    priorityLabel: input.priorityLabel ?? "",
+    targetSalary: typeof input.targetSalary === "number" && input.targetSalary > 0 ? input.targetSalary : undefined,
     job: {
       company: job.company,
       role: job.role,
@@ -221,4 +227,40 @@ export async function requestAiEvaluation(input: EvalRequestInput): Promise<{ mo
     },
   };
   return post<AiEvalData>(body, 60000);
+}
+
+export interface RecommendRequestInput {
+  resume: MasterResume;
+  config: AiConfig;
+  priorityLabel?: string;
+}
+
+export interface AiRecommendData {
+  titles?: { title?: string; why?: string }[];
+  salaryBand?: { min?: number; max?: number; basis?: string };
+  targets?: { group?: string; why?: string }[];
+}
+
+/** 이력서만 보내 포지션 키워드·연봉 참고 범위·타깃 기업군을 받습니다. */
+export async function requestAiRecommendation(input: RecommendRequestInput): Promise<{ model?: string; data: AiRecommendData }> {
+  const body = {
+    mode: "recommend" as const,
+    apiKey: keyOf(input.config),
+    model: input.config.model || undefined,
+    priorityLabel: input.priorityLabel ?? "",
+    resume: {
+      headline: input.resume.headline,
+      years: input.resume.years,
+      summary: input.resume.summary,
+      skills: input.resume.skills,
+      industries: input.resume.industries,
+      experiences: input.resume.experiences.map((exp) => ({
+        company: exp.company,
+        role: exp.role,
+        period: exp.period,
+        bullets: exp.bullets.map((bullet) => bullet.text).filter((text) => text.trim().length > 3),
+      })),
+    },
+  };
+  return post<AiRecommendData>(body, 45000);
 }

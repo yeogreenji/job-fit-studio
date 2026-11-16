@@ -12,6 +12,8 @@
  * 개인정보: 키와 입력은 저장하지 않습니다.
  */
 
+import { UrlError, excerptOf, fetchJobPage, structureFromPage, type ExtractedJob, type FetchedPage } from "./_joburl";
+
 type HeaderValue = string | string[] | undefined;
 
 interface ApiRequest {
@@ -29,7 +31,9 @@ interface ApiResponse {
 }
 
 const SERVICE = "jobfit-analyze";
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
+const MODES = ["package", "interview_eval", "job_url", "recommend"] as const;
+type Mode = (typeof MODES)[number];
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 const ALLOWED_MODELS = new Set(["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"]);
@@ -180,17 +184,21 @@ const PACKAGE_SYSTEM = `[JOBFIT_PACKAGE] 당신은 한국 기업 채용에 맞�
 4. 1분 자기소개는 250~320자 한국어 구어체로, 원문에 있는 경력과 수치만 인용해 4문장 구조(훅·증명·적합·마무리)로 씁니다.
 5. 압박 질문은 공고의 요구·갭에서 나와야 하며, 지원자가 답을 지어내야 하는 전제를 넣지 않습니다.
 6. 역질문은 지원자가 면접관에게 실제로 물을 수 있는 것으로, 회사 내부 기밀을 요구하지 않습니다.
-7. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장, 코드블록 표시를 붙이지 않습니다.
+7. 각 질문의 answer는 지원자가 90초 안에 말할 수 있는 4~5문장 스크립트입니다. 원문 문장을 근거로 쓰고, 원문에 없는 수치·회사는 쓰지 않습니다.
+   avoid는 그 질문에서 면접관을 잃는 답변 한 문장입니다.
+8. negotiation의 숫자는 [희망 연봉]에 주어진 값만 씁니다. 값이 없으면 금액 없이 조건 중심으로 씁니다.
+9. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장, 코드블록 표시를 붙이지 않습니다.
 
 {
-  "fit": {"verdict": "이 지원자의 적합성을 2문장으로", "strengths": [{"label": "12자 내외", "why": "원문 근거"}], "gaps": [{"label": "공고의 미충족 요구", "how": "원문 범위에서 보완할 방법"}]},
+  "fit": {"verdict": "이 지원자의 적합성을 2문장으로", "onePoint": {"title": "12자 내외", "body": "이 공고에 넣을 때 강조할 원포인트 전략 2~3문장"}, "strengths": [{"label": "12자 내외", "why": "원문 근거"}], "gaps": [{"label": "공고의 미충족 요구", "how": "원문 범위에서 보완할 방법"}]},
   "intro": {"text": "250~320자 1분 자기소개", "outline": {"hook": "", "proof": "", "fit": "", "close": ""}},
   "appeals": [{"title": "12자 내외", "body": "공고 요구와 경력 근거를 연결한 2문장"}],
   "rewrites": [{"before": "원문 문장 그대로", "after": "다듬은 문장(120자 이내)", "reason": "어떤 공고 문구를 반영했는지"}],
-  "questions": [{"question": "압박 면접 질문", "why": "왜 묻는지", "category": "전환|성과 검증|위기 대응|직무|협업|리더십|갭 보완|컬처"}],
-  "reverseQuestions": [{"question": "면접관에게 할 질문", "intent": "이 질문으로 확인하려는 것", "tone": "성과 기준|갭 확인|조직 적합"}]
+  "questions": [{"question": "압박 면접 질문", "why": "왜 묻는지", "category": "전환|성과 검증|위기 대응|직무|협업|리더십|갭 보완|컬처", "answer": "4~5문장 말하기 스크립트", "avoid": "피해야 할 답변 한 문장"}],
+  "reverseQuestions": [{"question": "면접관에게 할 질문", "intent": "이 질문으로 확인하려는 것", "tone": "성과 기준|갭 확인|조직 적합"}],
+  "negotiation": {"opener": "처우 협의 첫 문장", "counter": "금액 차이가 있을 때 제안 문장", "nonSalary": ["비연봉 조건 3~5개"], "questions": ["처우·조직 확인 질문 3개"]}
 }
-strengths 3개, gaps 3개, appeals 3개, rewrites 최대 10개, questions 5개, reverseQuestions 3개로 맞춥니다.`;
+strengths 3개, gaps 2~3개, appeals 3개, rewrites 최대 10개, questions 5개, reverseQuestions 3개로 맞춥니다.`;
 
 const EVAL_SYSTEM = `[JOBFIT_EVAL] 당신은 한국 기업 실전 면접을 90초 답변으로 연습시키는 면접 코치입니다.
 규칙:
@@ -229,12 +237,78 @@ ${job.preferred || "(미입력)"}
 조직 톤:
 ${job.tone || "(미입력)"}
 
+[이직 우선순위]
+${str(body.priorityLabel, 40) || "(미선택)"} — 이 우선순위를 자기소개 마무리와 처우 협상 문장에 반영하세요.
+[희망 연봉]
+${typeof body.targetSalary === "number" && Number.isFinite(body.targetSalary) && body.targetSalary > 0 ? `${Math.round(body.targetSalary)}만원` : "(미입력 — 금액을 쓰지 말 것)"}
+
 [내장 엔진 계산]
 적합도 ${typeof match.score === "number" ? match.score : "?"}/100 (${str(match.grade, 20) || "?"})
 미충족: ${strList(match.missing, 12, 40).join(", ") || "없음"}
 보완: ${strList(match.weak, 12, 40).join(", ") || "없음"}
 
 위 지원자와 공고로 요청한 JSON을 만드세요. 원문에 없는 수치와 회사명은 절대 쓰지 마세요.`;
+}
+
+const JOB_EXTRACT_SYSTEM = `[JOBFIT_JOBURL] 당신은 채용 공고 페이지의 HTML에서 뽑아낸 텍스트를 읽고, 공고 정보를 구조화하는 도구입니다.
+규칙:
+1. 주어진 본문에 실제로 적힌 내용만 옮깁니다. 본문에 없는 회사명·직무·연봉·복지·수치를 만들지 않습니다.
+2. 회사명은 채용 주체(회사)입니다. 사이트 이름(예: 채용 플랫폼 이름)을 회사명으로 쓰지 않습니다.
+3. 담당 업무·자격 요건·우대 사항은 원문 문장을 줄 단위로 옮깁니다(각 12줄, 1,800자 이내). 요약해서 새 문장을 만들지 않아도 됩니다.
+4. 조직 문화/복지 섹션이 있으면 tone에 옮기고, 없으면 빈 문자열로 둡니다.
+5. 찾을 수 없는 항목은 빈 문자열("")로 둡니다. 추측해서 채우지 않습니다.
+6. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장이나 코드블록 표시를 붙이지 않습니다.
+
+{
+  "company": "",
+  "role": "",
+  "employmentType": "",
+  "location": "",
+  "deadline": "",
+  "responsibilities": "",
+  "requirements": "",
+  "preferred": "",
+  "tone": "",
+  "note": "공고에서 확인하지 못한 항목이 있으면 한 문장"
+}`;
+
+const RECOMMEND_SYSTEM = `[JOBFIT_RECOMMEND] 당신은 한국 경력직 이직을 돕는 커리어 코치입니다.
+지원자의 이력서만 보고 (공고 없이) 다음을 제안합니다.
+규칙:
+1. 이력서 원문에 있는 경력·산업·스킬만 근거로 씁니다. 없는 경력을 전제로 한 포지션을 권하지 않습니다.
+2. titles는 지금 바로 지원할 수 있는 포지션명 3개입니다. 각 항목의 why에는 이력서의 어떤 경험이 근거인지 한 문장으로 씁니다.
+3. salaryBand는 한국 시장의 일반적인 범위를 만원 단위 정수로 추정합니다(예: 4200~5200). 확정된 값이 아니며, basis에 "연차·직무 기준 추정"처럼 근거와 한계를 반드시 적습니다.
+4. targets는 지원할 기업군 3개입니다(회사명이 아니라 기업군: 예 "B2B SaaS 인하우스", "뷰티·커머스 브랜드", "PR 대행사 시니어"). why에 왜 이 지원자에게 맞는지 한 문장.
+5. 반드시 아래 JSON 객체 하나만 출력합니다.
+
+{"titles": [{"title": "", "why": ""}], "salaryBand": {"min": 0, "max": 0, "basis": ""}, "targets": [{"group": "", "why": ""}]}`;
+
+function numbersIn(text: string): Set<string> {
+  return new Set((text.match(/\d[\d,.]*/g) ?? []).map((token) => token.replace(/[,]/g, "").replace(/\.$/, "")));
+}
+
+function buildJobExtractPrompt(page: Pick<FetchedPage, "title" | "finalUrl" | "text">): string {
+  const body = page.text.replace(/\n{2,}/g, "\n").slice(0, 6_000);
+  return `[페이지 제목] ${page.title}\n[주소] ${page.finalUrl}\n[본문]\n${body}\n\n위 페이지에서 회사·직무·담당 업무·자격 요건·우대 사항·조직 문화를 뽑아 JSON으로 정리하세요. 본문에 없는 값은 빈 문자열로 두세요.`;
+}
+
+function buildRecommendPrompt(resume: NormalizedResume, priority: string): string {
+  const experiences = resume.experiences
+    .map((exp) => `[${exp.company} · ${exp.role} · ${exp.period}]\n${exp.bullets.map((bullet) => `- ${bullet}`).join("\n")}`)
+    .join("\n\n");
+  return `[지원자]
+한 줄 소개: ${resume.headline || "(미입력)"} · 경력 ${resume.years}년
+요약: ${resume.summary || "(미입력)"}
+스킬: ${resume.skills.join(", ") || "(미입력)"}
+산업: ${resume.industries.join(", ") || "(미입력)"}
+
+[경력 문장 — 이 문장의 사실만 근거로 사용]
+${experiences}
+
+[이직 우선순위]
+${priority || "(미선택)"}
+
+위 지원자에게 맞는 포지션 3개, 연봉 참고 범위, 타깃 기업군 3개를 JSON으로 제안하세요.`;
 }
 
 function buildEvalPrompt(body: Record<string, unknown>, job: NormalizedJob | null, resume: NormalizedResume | null): string {
@@ -440,7 +514,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       provider: envProvider,
       model: envProvider === "gemini" ? geminiConfigModel : openaiConfigModel,
       reason: envProvider ? undefined : "no_key",
-      modes: ["package", "interview_eval"],
+      modes: [...MODES],
+      urlFetch: true,
     });
     return;
   }
@@ -456,9 +531,9 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
-  const mode = str(body.mode, 30);
-  if (mode !== "package" && mode !== "interview_eval") {
-    fail(res, 400, "bad_mode", "mode는 package 또는 interview_eval 이어야 합니다.");
+  const mode = str(body.mode, 30) as Mode;
+  if (!MODES.includes(mode)) {
+    fail(res, 400, "bad_mode", "mode는 package, interview_eval, job_url, recommend 중 하나이어야 합니다.");
     return;
   }
 
@@ -475,10 +550,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   const openaiKey = openaiEnvKey || (requestKey && !isGeminiKey(requestKey) ? requestKey : "");
   const provider: Provider | null = geminiKey ? "gemini" : openaiKey ? "openai" : null;
   const apiKey = geminiKey || openaiKey;
-  if (!provider) {
-    fail(res, 501, "no_key", "서버에 GEMINI_API_KEY나 OPENAI_API_KEY가 없고 요청에도 키가 없습니다.");
-    return;
-  }
+
   const requestedModel = str(body.model, 40);
   const useModel =
     provider === "gemini"
@@ -488,6 +560,87 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       : ALLOWED_MODELS.has(requestedModel)
         ? requestedModel
         : openaiConfigModel;
+
+  // URL 수집은 AI 키 없이도 동작합니다(페이지 글자에서 직접 문단을 나눔).
+  if (mode === "job_url") {
+    let page: FetchedPage;
+    try {
+      page = await fetchJobPage(str(body.jobUrl, 600));
+    } catch (error) {
+      if (error instanceof UrlError) {
+        send(res, error.status, {
+          ok: false,
+          error: { code: error.code, message: error.message, site: error.site, excerpt: error.excerpt ?? "" },
+          meta: { url: str(body.jobUrl, 600), site: error.site },
+        });
+        return;
+      }
+      fail(res, 502, "fetch_failed", error instanceof Error ? error.message.slice(0, 160) : "공고를 불러오지 못했습니다.");
+      return;
+    }
+
+    let job: ExtractedJob = structureFromPage(page);
+    let engine: "rule" | "ai" = "rule";
+    let model: string | undefined;
+    let note = "";
+    if (provider) {
+      try {
+        const completion = await callCompletion({
+          provider,
+          apiKey,
+          model: useModel,
+          system: JOB_EXTRACT_SYSTEM,
+          user: buildJobExtractPrompt(page),
+          maxTokens: 1_600,
+        });
+        const data = parseJsonContent(completion.content);
+        if (data) {
+          job = mergeExtracted(job, data, page.text);
+          engine = "ai";
+          model = completion.model;
+          note = str(data.note, 160);
+        }
+      } catch (error) {
+        note = `AI 정리를 건너뛰고 페이지 글자에서 직접 나눴습니다. (${error instanceof Error ? error.message.slice(0, 80) : "알 수 없는 오류"})`;
+      }
+    } else {
+      note = "AI 키 없이 페이지 글자에서 직접 나눴습니다. 문단이 어긋나면 본문을 붙여넣어 주세요.";
+    }
+    if (!job.company && !job.role) {
+      send(res, 422, {
+        ok: false,
+        error: {
+          code: "not_job_page",
+          message: `${page.site} 페이지에서 회사와 직무를 찾지 못했습니다. 공고 본문을 붙여넣어 주세요.`,
+          site: page.site,
+          excerpt: excerptOf(page),
+        },
+      });
+      return;
+    }
+    send(res, 200, {
+      ok: true,
+      mode,
+      engine,
+      provider,
+      model,
+      job,
+      meta: {
+        url: page.url,
+        finalUrl: page.finalUrl,
+        site: page.site,
+        title: page.title.slice(0, 160),
+        chars: page.text.length,
+        note,
+      },
+    });
+    return;
+  }
+
+  if (!provider) {
+    fail(res, 501, "no_key", "서버에 GEMINI_API_KEY나 OPENAI_API_KEY가 없고 요청에도 키가 없습니다.");
+    return;
+  }
 
   try {
     if (mode === "package") {
@@ -508,6 +661,29 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         system: PACKAGE_SYSTEM,
         user: buildPackagePrompt(body, job, resume),
         maxTokens: 2_400,
+      });
+      const data = parseJsonContent(completion.content);
+      if (!data) {
+        fail(res, 502, "bad_json", "AI 응답을 JSON으로 읽지 못했습니다.");
+        return;
+      }
+      send(res, 200, { ok: true, mode, provider, model: completion.model, data });
+      return;
+    }
+
+    if (mode === "recommend") {
+      const resume = normalizeResume(body.resume);
+      if (!resume) {
+        fail(res, 400, "bad_resume", "경력 문장이 한 개 이상 필요합니다.");
+        return;
+      }
+      const completion = await callCompletion({
+        provider,
+        apiKey,
+        model: useModel,
+        system: RECOMMEND_SYSTEM,
+        user: buildRecommendPrompt(resume, str(body.priorityLabel, 40)),
+        maxTokens: 1_100,
       });
       const data = parseJsonContent(completion.content);
       if (!data) {
@@ -547,6 +723,29 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     const message = error instanceof Error ? error.message : "알 수 없는 오류";
     fail(res, status === 401 ? 502 : status, status === 401 ? "provider_auth" : "upstream", message.slice(0, 200));
   }
+}
+
+/** AI가 정리한 공고 필드를 페이지 원문과 대조해 받아들입니다. 원문에 없는 숫자는 버리고, 비어 있으면 기존 값을 유지합니다. */
+function mergeExtracted(heuristic: ExtractedJob, data: Record<string, unknown>, pageText: string): ExtractedJob {
+  const allowed = numbersIn(pageText);
+  const pick = (key: keyof ExtractedJob, limit: number): string => {
+    const candidate = str(data[key], limit);
+    if (!candidate) return heuristic[key];
+    const invented = [...numbersIn(candidate)].filter((token) => !allowed.has(token));
+    if (invented.length) return heuristic[key];
+    return candidate;
+  };
+  return {
+    company: pick("company", 80),
+    role: pick("role", 80),
+    employmentType: pick("employmentType", 30),
+    location: pick("location", 60),
+    deadline: pick("deadline", 40),
+    responsibilities: pick("responsibilities", 2_000),
+    requirements: pick("requirements", 2_000),
+    preferred: pick("preferred", 2_000),
+    tone: pick("tone", 1_200),
+  };
 }
 
 /** 면접 평가 모드에서는 공고·이력서가 일부만 와도 됩니다. */

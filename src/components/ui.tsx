@@ -146,6 +146,30 @@ export function statusDot(status: KeywordStatus) {
   return STATUS_STYLE[status].dot;
 }
 
+/** 클립보드 API가 막힌 환경(권한 없는 iframe 등)에서도 복사되도록 예비 경로를 둡니다. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.top = "-1000px";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      area.remove();
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
 export function CopyButton({
   text,
   label = "복사",
@@ -169,12 +193,7 @@ export function CopyButton({
       type="button"
       className={cx("btn btn-ghost px-2 py-1 text-[11.5px] text-muted hover:text-ink", className)}
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(text);
-          setDone(true);
-        } catch {
-          setDone(false);
-        }
+        setDone(await copyText(text));
       }}
     >
       {done ? <Check size={13} /> : <Icon size={13} />}

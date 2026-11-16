@@ -22,6 +22,11 @@ export function buildMarkdown(pkg: JobPackage): string {
   lines.push(`- 고용 형태: ${pkg.employmentType}${pkg.location ? ` · ${pkg.location}` : ""}`);
   lines.push(`- 생성: ${when.getFullYear()}.${pad(when.getMonth() + 1)}.${pad(when.getDate())} ${pad(when.getHours())}:${pad(when.getMinutes())}`);
   lines.push(`- 엔진: ${pkg.engine === "ai" ? `AI 분석${pkg.aiModel ? ` (${pkg.aiModel})` : ""}` : "내장 키워드 매칭 엔진 v1.0"}`);
+  if (pkg.source) {
+    lines.push(`- 공고 출처: ${pkg.source.kind === "url" ? `${pkg.source.site ?? "URL"} · ${pkg.source.url ?? ""}` : pkg.source.kind === "paste" ? "본문 붙여넣기" : "샘플"}`);
+  }
+  if (pkg.priority) lines.push(`- 이직 우선순위: ${pkg.priority}`);
+  if (pkg.targetSalary) lines.push(`- 희망 연봉: ${pkg.targetSalary.toLocaleString("ko-KR")}만원`);
   lines.push("");
   lines.push("## 1. 적합도 요약");
   lines.push("");
@@ -36,6 +41,11 @@ export function buildMarkdown(pkg: JobPackage): string {
   lines.push(`- ${match.summaryLine}`);
   lines.push(`- 조직 톤: ${match.tone.label}`);
   lines.push(`- ${match.tone.summary}`);
+  if (pkg.onePoint) {
+    lines.push("");
+    lines.push(`### 원포인트 전략 — ${pkg.onePoint.title}`);
+    lines.push(pkg.onePoint.body);
+  }
   lines.push("");
   lines.push("## 2. 키워드 매칭과 갭");
   lines.push("");
@@ -103,7 +113,23 @@ export function buildMarkdown(pkg: JobPackage): string {
     lines.push(`   - 의도: ${item.intent}`);
   });
   lines.push("");
-  lines.push("## 6. 면접 예상 질문 & STAR");
+  lines.push("## 6. 처우 · 연봉 협상 스크립트");
+  lines.push("");
+  if (pkg.negotiation) {
+    const negotiation = pkg.negotiation;
+    lines.push(`- 기준 금액: ${negotiation.target || "미입력"} (${negotiation.basis})`);
+    lines.push("");
+    lines.push(`**첫 제안** — ${negotiation.opener}`);
+    lines.push("");
+    lines.push(`**금액 차이가 있을 때** — ${negotiation.counter}`);
+    lines.push("");
+    if (negotiation.nonSalary.length) lines.push(`- 비연봉 카드: ${negotiation.nonSalary.join(" / ")}`);
+    negotiation.questions.forEach((item) => lines.push(`- 처우 확인 질문: ${item}`));
+  } else {
+    lines.push("협상 스크립트가 없습니다. 희망 연봉을 입력하고 다시 분석하세요.");
+  }
+  lines.push("");
+  lines.push("## 7. 면접 예상 질문 & 모범 답변");
   lines.push("");
   pkg.questions.forEach((q, index) => {
     lines.push(`### Q${index + 1}. [${q.category} · ${DIFFICULTY[q.difficulty]}] ${q.question}`);
@@ -111,17 +137,27 @@ export function buildMarkdown(pkg: JobPackage): string {
     lines.push(`> 왜 묻는가: ${q.why}`);
     if (q.gap) lines.push(`> 연결 갭: ${q.gap}`);
     lines.push("");
+    if (q.answer) {
+      lines.push("**모범 답변 스크립트**");
+      lines.push("");
+      q.answer.split("\n").forEach((line) => lines.push(line));
+      lines.push("");
+    }
     lines.push(`- **S** ${q.star.situation}`);
     lines.push(`- **T** ${q.star.task}`);
     lines.push(`- **A** ${q.star.action}`);
     lines.push(`- **R** ${q.star.result}`);
+    if (q.avoid) {
+      lines.push("");
+      lines.push(`> 피해야 할 답변: ${q.avoid}`);
+    }
     lines.push("");
   });
-  lines.push("## 7. 모의면접 피드백");
+  lines.push("## 8. 90초 연습 피드백");
   lines.push("");
   const feedback = (pkg.feedback ?? []).slice(0, 5);
   if (feedback.length === 0) {
-    lines.push("아직 모의면접 기록이 없습니다. 앱의 면접 탭 → 모의면접 90초에서 답변을 연습하세요.");
+    lines.push("아직 90초 연습 기록이 없습니다. 결과 화면의 질문 카드에서 ‘시작’을 눌러 답변을 연습하세요.");
   } else {
     for (const item of feedback) {
       lines.push(`### ${item.question}`);
@@ -133,7 +169,7 @@ export function buildMarkdown(pkg: JobPackage): string {
     }
   }
   lines.push("");
-  lines.push("## 8. 제출 전 체크리스트");
+  lines.push("## 9. 제출 전 체크리스트");
   lines.push("");
   lines.push(`- [${adopted.length === pkg.rewrites.length ? "x" : " "}] 경력기술서 리라이트 전체 반영 검토 (${adopted.length}/${pkg.rewrites.length})`);
   lines.push(`- [${pkg.questions.every((q) => q.star.result && !q.star.result.startsWith("[")) ? "x" : " "}] STAR 답변의 결과 수치 채우기`);

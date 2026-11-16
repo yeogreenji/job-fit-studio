@@ -1,12 +1,27 @@
-import os
+"""README용 화면 캡처 (새 URL·이력서 중심 흐름)."""
+
+import os, socket, subprocess, time, atexit
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
 os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + ((":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else "")
 from playwright.sync_api import sync_playwright
 
-BASE = "http://127.0.0.1:4183/"
 ROOT = "/workspace/projects/job-fit-studio"
+NODE = "/workspace/.tools/node-v22.12.0-linux-x64/bin/node"
 OUT = os.path.join(ROOT, "docs/screenshots")
+PORT = 4183
+FIXTURES = os.path.join(ROOT, "scripts/fixtures")
 os.makedirs(OUT, exist_ok=True)
+
+proc = subprocess.Popen([NODE, "scripts/e2e-server.mjs", "ai", str(PORT)], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+atexit.register(lambda: proc.terminate())
+for _ in range(150):
+    try:
+        socket.create_connection(("127.0.0.1", PORT), timeout=0.5)
+        break
+    except OSError:
+        time.sleep(0.3)
+
+BASE = f"http://127.0.0.1:{PORT}/"
 errors = []
 
 
@@ -15,171 +30,101 @@ def attach(page):
     page.on("pageerror", lambda e: errors.append(f"[pageerror] {e}"))
 
 
-def calm(page, ms=650):
+def calm(page, ms=700):
     page.mouse.move(900, 8)
     page.wait_for_timeout(ms)
 
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
-    ctx = browser.new_context(viewport={"width": 1440, "height": 960}, device_scale_factor=2, locale="ko-KR", accept_downloads=True)
+    ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, device_scale_factor=2, locale="ko-KR", accept_downloads=True)
     page = ctx.new_page()
     attach(page)
     page.goto(BASE, wait_until="domcontentloaded")
     page.wait_for_timeout(1400)
     calm(page)
-    page.screenshot(path=f"{OUT}/01-desktop-empty.png")
+    page.screenshot(path=f"{OUT}/01-desktop-start.png")
 
-    # 파일 불러오기 확인 창
-    page.set_input_files("[data-testid='empty-import-input']", os.path.join(ROOT, "scripts/fixtures/my-job.txt"))
-    page.wait_for_selector("[data-testid=import-summary]", timeout=10000)
-    calm(page, 500)
-    page.screenshot(path=f"{OUT}/02-desktop-import.png")
-    page.click("[data-testid=import-apply]")
-    page.wait_for_timeout(700)
-    page.set_input_files("[data-testid='input-import-input']", os.path.join(ROOT, "scripts/fixtures/my-resume.txt"))
-    page.wait_for_selector("[data-testid=import-summary]", timeout=10000)
-    page.click("[data-testid=import-apply]")
-    page.wait_for_timeout(800)
+    page.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
+    page.wait_for_selector("[data-testid=resume-status]", timeout=15000)
+    page.wait_for_timeout(900)
+    calm(page)
+    page.screenshot(path=f"{OUT}/02-desktop-resume.png")
 
-    page.get_by_role("button", name="지원 패키지 생성").click()
-    page.wait_for_selector("text=적합도 진단", timeout=30000)
+    page.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
+    page.click("[data-testid=job-fetch]")
+    page.wait_for_selector("[data-testid=job-preview]", timeout=25000)
+    page.fill("[data-testid=target-salary]", "5500")
+    page.click("[data-testid=priority-balance]")
+    page.wait_for_timeout(900)
+    calm(page)
+    page.screenshot(path=f"{OUT}/03-desktop-job.png")
+
+    page.click("[data-testid=generate]")
+    page.wait_for_selector("[data-testid=result]", timeout=45000)
     page.wait_for_timeout(3000)
     calm(page)
-    page.screenshot(path=f"{OUT}/03-desktop-match.png")
+    page.screenshot(path=f"{OUT}/04-desktop-fit.png")
 
-    page.locator("button:has-text('중요도')").first.scroll_into_view_if_needed()
-    page.wait_for_timeout(300)
-    page.locator("button:has-text('중요도')").first.click()
-    page.wait_for_timeout(600)
+    page.locator("[data-testid=section-pitch]").scroll_into_view_if_needed()
     calm(page)
-    page.screenshot(path=f"{OUT}/04-desktop-gap.png")
+    page.screenshot(path=f"{OUT}/05-desktop-pitch.png")
 
-    page.get_by_role("button", name="경력 리라이트").first.click()
-    page.wait_for_timeout(900)
-    page.evaluate("window.scrollTo({top:0})")
-    calm(page)
-    page.screenshot(path=f"{OUT}/05-desktop-rewrite.png")
-
-    page.get_by_role("button", name="면접", exact=True).first.click()
-    page.wait_for_timeout(700)
+    page.locator("[data-testid=section-interview]").scroll_into_view_if_needed()
     calm(page)
     page.screenshot(path=f"{OUT}/06-desktop-interview.png")
 
-    page.click("[data-testid=mode-mock]")
-    page.wait_for_timeout(500)
-    page.click("[data-testid=mock-start]")
-    page.wait_for_timeout(4000)
-    page.fill(
-        "[data-testid=mock-answer]",
-        "당시 위기 이슈가 터졌고 제가 먼저 공식 입장문 초안을 작성해 24시간 안에 배포했습니다. "
-        "이해관계 부서와 문장을 조율했고, 그 결과 기사 노출이 5건에서 1건으로 줄었습니다. "
-        "이후 같은 이슈가 반복되지 않도록 대응 매뉴얼을 만들었습니다.",
-    )
-    page.click("[data-testid=mock-submit]")
-    page.wait_for_selector("[data-testid=mock-feedback]", timeout=20000)
-    page.wait_for_timeout(900)
-    page.locator("[data-testid=mock-feedback]").scroll_into_view_if_needed()
-    page.wait_for_timeout(400)
+    page.locator("[data-testid=section-offer]").scroll_into_view_if_needed()
     calm(page)
-    page.screenshot(path=f"{OUT}/07-desktop-mock.png")
+    page.screenshot(path=f"{OUT}/07-desktop-offer.png")
 
-    page.get_by_role("button", name="1분 소개").first.click()
+    page.click("[data-testid=open-tracker]")
+    page.wait_for_timeout(1000)
+    calm(page)
+    page.screenshot(path=f"{OUT}/08-desktop-tracker.png")
+
+    page.click("[data-testid=nav-history]")
     page.wait_for_timeout(900)
     calm(page)
-    page.screenshot(path=f"{OUT}/08-desktop-pitch.png")
+    page.screenshot(path=f"{OUT}/09-desktop-history.png")
 
-    page.get_by_role("button", name="지원 현황").first.click()
-    page.wait_for_timeout(800)
-    page.locator("input[aria-label='희망 연봉(만원)']").fill("5200")
-    page.locator("input[aria-label='제시 연봉(만원)']").fill("5500")
+    page.click("[data-testid=open-ai]")
     page.wait_for_timeout(700)
-    page.locator("[data-testid=negotiation] button").nth(0).click()
-    page.locator("[data-testid=negotiation] button").nth(1).click()
-    page.wait_for_timeout(600)
     calm(page)
-    page.screenshot(path=f"{OUT}/09-desktop-tracker.png")
-
-    page.get_by_role("button", name="지원 스튜디오").first.click()
-    page.wait_for_timeout(700)
-    page.get_by_role("button", name="내보내기").first.click()
-    page.wait_for_timeout(800)
-    calm(page)
-    page.screenshot(path=f"{OUT}/10-desktop-export.png")
-
-    page.get_by_role("button", name="AI 연결").first.click()
-    page.wait_for_timeout(700)
-    page.screenshot(path=f"{OUT}/11-desktop-ai-modal.png")
-    page.get_by_role("button", name="취소").click()
+    page.screenshot(path=f"{OUT}/10-desktop-ai.png")
+    page.keyboard.press("Escape")
     page.wait_for_timeout(400)
 
-    page.emulate_media(media="print")
-    page.wait_for_timeout(600)
-    page.screenshot(path=f"{OUT}/12-print-sheet.png", full_page=True)
-    page.emulate_media(media="screen")
-
-    page.set_viewport_size({"width": 1024, "height": 820})
-    page.wait_for_timeout(800)
-    calm(page)
-    page.screenshot(path=f"{OUT}/13-tablet.png")
-
-    # 히스토리 (예시 공고 두 건 추가)
-    page.set_viewport_size({"width": 1440, "height": 960})
-    page.get_by_role("button", name="지원 스튜디오").first.click()
-    page.wait_for_timeout(600)
-    page.get_by_role("button", name="채용 공고", exact=True).first.click()
-    page.wait_for_timeout(400)
-    page.get_by_role("button", name="어반모빌리티").first.click()
-    page.wait_for_timeout(400)
-    page.get_by_role("button", name="지원 패키지 생성").click()
-    page.wait_for_timeout(4000)
-    page.get_by_role("button", name="패키지 히스토리").first.click()
-    page.wait_for_timeout(900)
-    picks = page.get_by_title("비교 대상으로 선택")
-    picks.nth(0).click()
-    picks.nth(1).click()
-    page.wait_for_timeout(800)
-    calm(page)
-    page.screenshot(path=f"{OUT}/14-desktop-history.png")
-
-    # 모바일
     mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
     mp = mctx.new_page()
     attach(mp)
     mp.goto(BASE, wait_until="domcontentloaded")
-    mp.wait_for_timeout(1500)
-    mp.screenshot(path=f"{OUT}/15-mobile-empty.png")
-    mp.get_by_role("button", name="이 예시로 생성").first.click()
-    mp.wait_for_selector("text=적합도 진단", timeout=30000)
-    mp.wait_for_timeout(3000)
-    mp.evaluate("window.scrollTo(0, 0)")
-    mp.wait_for_timeout(400)
-    mp.screenshot(path=f"{OUT}/16-mobile-match.png")
-    mp.locator("nav.fixed button").nth(0).click()
-    mp.wait_for_timeout(700)
-    mp.evaluate("window.scrollTo(0, 0)")
-    mp.wait_for_timeout(400)
-    mp.screenshot(path=f"{OUT}/17-mobile-input.png")
-    mp.locator("nav.fixed button").nth(1).click()
-    mp.wait_for_timeout(600)
-    mp.get_by_role("button", name="1분 소개").last.click()
-    mp.wait_for_timeout(900)
-    mp.evaluate("window.scrollTo(0, 0)")
-    mp.wait_for_timeout(400)
-    mp.screenshot(path=f"{OUT}/18-mobile-pitch.png")
-    mp.get_by_role("button", name="면접").last.click()
-    mp.wait_for_timeout(700)
-    mp.click("[data-testid=mode-mock]")
-    mp.wait_for_timeout(700)
-    mp.evaluate("window.scrollTo(0, 640)")
-    mp.wait_for_timeout(600)
-    mp.screenshot(path=f"{OUT}/19-mobile-mock.png")
-    mp.locator("nav.fixed button").nth(3).click()
-    mp.wait_for_timeout(900)
-    mp.screenshot(path=f"{OUT}/20-mobile-tracker.png")
+    mp.wait_for_timeout(1400)
+    calm(mp)
+    mp.screenshot(path=f"{OUT}/11-mobile-start.png")
+    mp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
+    mp.wait_for_selector("[data-testid=resume-status]", timeout=15000)
+    mp.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
+    mp.click("[data-testid=job-fetch]")
+    mp.wait_for_selector("[data-testid=job-preview]", timeout=25000)
+    calm(mp)
+    mp.screenshot(path=f"{OUT}/12-mobile-job.png", full_page=True)
+    mp.click("[data-testid=generate]")
+    mp.wait_for_selector("[data-testid=result]", timeout=45000)
+    mp.wait_for_timeout(2500)
+    calm(mp)
+    mp.screenshot(path=f"{OUT}/13-mobile-fit.png")
+    mp.locator("[data-testid=section-interview]").scroll_into_view_if_needed()
+    calm(mp)
+    mp.screenshot(path=f"{OUT}/14-mobile-interview.png")
+    mp.click("[data-testid=nav-tracker]")
+    mp.wait_for_timeout(1000)
+    calm(mp)
+    mp.screenshot(path=f"{OUT}/15-mobile-tracker.png")
+    mctx.close()
 
     browser.close()
 
-print("ERRORS:", len(errors))
-for err in errors:
+print("errors:", len(errors))
+for err in errors[:10]:
     print(err)

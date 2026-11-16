@@ -1,19 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Download,
-  FileText,
-  Gauge as GaugeIcon,
-  ListChecks,
-  Mic,
-  Package,
-  PenLine,
-  Printer,
-  Quote,
-  RefreshCw,
-  Sparkles,
-  Upload,
-  X,
-} from "lucide-react";
+import { Upload, X } from "lucide-react";
 import type {
   AiConfig,
   AiStatus,
@@ -21,55 +7,56 @@ import type {
   InterviewFeedback,
   JobPackage,
   JobPosting,
+  JobSource,
   MasterResume,
-  StarAnswer,
-  TabId,
+  PriorityId,
+  ResumeRecommendation,
   ViewId,
 } from "./types";
-import { DEFAULT_JOB, DEFAULT_RESUME, EMPTY_JOB, EMPTY_RESUME, SAMPLE_JOBS } from "./lib/presets";
-import { analyze, projectMatch } from "./lib/engine";
+import { SAMPLE_RESUMES } from "./lib/presets";
+import { analyze } from "./lib/engine";
 import { enrichWithAi } from "./lib/enrich";
-import { AiError, probeAiServer } from "./lib/ai";
+import { AiError, probeAiServer, requestAiRecommendation } from "./lib/ai";
 import { buildLocalIntro, buildLocalReverse } from "./lib/coach";
+import { buildLocalAnswerSet, buildLocalNegotiation, buildLocalOnePoint, priorityOf } from "./lib/priority";
+import { recommendLocal } from "./lib/recommend";
 import { buildMarkdown, downloadText, slugForFile } from "./lib/report";
-import { buildPreview, guessKind, readFileText, type ImportKind, type ParsedImport } from "./lib/import";
+import { buildPreview, guessKind, parseJobText, readFileText } from "./lib/import";
+import { extractPdfText } from "./lib/pdf";
+import { fetchJobFromUrl, JobUrlError } from "./lib/jobUrl";
+import { guardText } from "./lib/guard";
 import {
   addPackage,
   clearPackages,
   loadAiConfig,
   loadPackages,
+  loadPrefs,
   loadResume,
+  loadResumeMeta,
   loadTracker,
   makeEntry,
   persistAiConfig,
+  persistPrefs,
   persistResume,
+  persistResumeMeta,
   persistTracker,
   removePackage,
+  resumeBulletCount,
+  resumeReady,
   updatePackage,
+  type ResumeMeta,
 } from "./lib/storage";
-import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
-import { InputPanel, RUN_STEPS } from "./components/InputPanel";
-import { Rail } from "./components/Rail";
-import { EmptyState } from "./components/EmptyState";
-import { HistoryView } from "./components/HistoryView";
+import { Setup, type JobFetchError } from "./components/Setup";
+import { ResumeSheet } from "./components/ResumeSheet";
+import { ResultFlow } from "./components/ResultFlow";
 import { TrackerView } from "./components/TrackerView";
+import { HistoryView } from "./components/HistoryView";
 import { AiSettingsModal } from "./components/AiSettingsModal";
-import { ImportDialog } from "./components/ImportDialog";
-import { ModeBanner } from "./components/ModeBanner";
 import { PrintSheet } from "./components/PrintSheet";
-import { MatchTab } from "./components/tabs/MatchTab";
-import { RewriteTab } from "./components/tabs/RewriteTab";
-import { InterviewTab } from "./components/tabs/InterviewTab";
-import { PitchTab } from "./components/tabs/PitchTab";
-import { ExportTab } from "./components/tabs/ExportTab";
-import { Card, cx, scoreColor } from "./components/ui";
+import { cx } from "./components/ui";
 
-type MobilePanel = "input" | "studio" | "rail";
 type ToastTone = "ok" | "warn" | "err";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 
 const INITIAL_STATUS: AiStatus = {
   kind: "checking",
@@ -78,42 +65,38 @@ const INITIAL_STATUS: AiStatus = {
   checkedAt: new Date().toISOString(),
 };
 
-const emptyJob = (): JobPosting => ({ ...EMPTY_JOB, id: uid("job-custom") });
-const emptyResume = (): MasterResume => ({
-  ...EMPTY_RESUME,
-  id: uid("resume-custom"),
-  experiences: EMPTY_RESUME.experiences.map((exp) => ({
-    ...exp,
-    id: uid("exp"),
-    bullets: exp.bullets.map((bullet) => ({ ...bullet, id: uid("b") })),
-  })),
-});
+const DESCRIPTION_LIMIT = 6_000;
 
 export default function App() {
   const [view, setView] = useState<ViewId>("studio");
   const [resume, setResume] = useState<MasterResume>(() => loadResume());
-  const [job, setJob] = useState<JobPosting>(DEFAULT_JOB);
-  const [activeSampleResume, setActiveSampleResume] = useState<string | null>(DEFAULT_RESUME.id);
-  const [activeSampleJob, setActiveSampleJob] = useState<string | null>(DEFAULT_JOB.id);
-  const [inputTab, setInputTab] = useState<"job" | "resume">("job");
+  const [resumeMeta, setResumeMeta] = useState<ResumeMeta | null>(() => loadResumeMeta());
+  const [resumeOpen, setResumeOpen] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState<string | null>(null);
+
+  const [job, setJob] = useState<JobPosting | null>(null);
+  const [jobSource, setJobSource] = useState<JobSource | null>(null);
+  const [jobUrl, setJobUrl] = useState("");
+  const [jobError, setJobError] = useState<JobFetchError | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+
+  const [prefs, setPrefs] = useState(() => loadPrefs());
+  const [recommendation, setRecommendation] = useState<ResumeRecommendation | null>(null);
+  const [recommending, setRecommending] = useState(false);
 
   const [pkg, setPkg] = useState<JobPackage | null>(null);
-  const [tab, setTab] = useState<TabId>("match");
   const [saved, setSaved] = useState<JobPackage[]>(() => loadPackages());
-  const [running, setRunning] = useState(false);
+  const [tracker, setTracker] = useState<ApplicationEntry[]>(() => loadTracker());
+  const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [step, setStep] = useState(0);
-  const [introVariant, setIntroVariant] = useState(0);
 
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => loadAiConfig());
   const [aiStatus, setAiStatus] = useState<AiStatus>(INITIAL_STATUS);
-  const [probing, setProbing] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [mobilePanel, setMobilePanel] = useState<MobilePanel>("studio");
   const [toast, setToast] = useState<{ id: number; message: string; tone: ToastTone } | null>(null);
-  const [tracker, setTracker] = useState<ApplicationEntry[]>(() => loadTracker());
-  const [importState, setImportState] = useState<{ fileName: string; text: string; kind: ImportKind; preview: ParsedImport } | null>(null);
 
   const notify = useCallback((message: string, tone: ToastTone = "ok") => {
     setToast({ id: Date.now(), message, tone });
@@ -121,14 +104,18 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 5200);
+    const timer = setTimeout(() => setToast(null), 5600);
     return () => clearTimeout(timer);
   }, [toast]);
 
   useEffect(() => {
-    const timer = setTimeout(() => persistResume(resume), 350);
+    const timer = setTimeout(() => persistResume(resume), 300);
     return () => clearTimeout(timer);
   }, [resume]);
+
+  useEffect(() => {
+    persistPrefs(prefs);
+  }, [prefs]);
 
   useEffect(() => {
     persistTracker(tracker);
@@ -136,16 +123,11 @@ export default function App() {
 
   useEffect(() => {
     if (!pkg) return;
-    const timer = setTimeout(() => setSaved((prev) => updatePackage(prev, pkg)), 500);
+    const timer = setTimeout(() => setSaved((prev) => updatePackage(prev, pkg)), 400);
     return () => clearTimeout(timer);
   }, [pkg]);
 
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, [mobilePanel, view]);
-
   const refreshAi = useCallback(async (): Promise<AiStatus> => {
-    setProbing(true);
     setAiStatus((prev) => ({ ...prev, kind: "checking", message: "AI 서버 확인 중" }));
     const result = await probeAiServer();
     const status: AiStatus = {
@@ -157,7 +139,6 @@ export default function App() {
       checkedAt: new Date().toISOString(),
     };
     setAiStatus(status);
-    setProbing(false);
     return status;
   }, []);
 
@@ -165,320 +146,322 @@ export default function App() {
     void refreshAi();
   }, [refreshAi]);
 
-  const projection = useMemo(
-    () => (pkg ? projectMatch(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.rewrites, pkg.summary) : null),
-    [pkg],
-  );
+  /* ── 이력서 기반 추천 (규칙) ── */
+  useEffect(() => {
+    if (!resumeReady(resume)) {
+      setRecommendation(null);
+      return;
+    }
+    setRecommendation((prev) => (prev?.source === "ai" ? prev : recommendLocal(resume)));
+  }, [resume]);
 
-  const stale = useMemo(() => {
-    if (!pkg) return false;
-    const snap = pkg.resumeSnapshot;
-    return (
-      job.company !== pkg.jobSnapshot.company ||
-      job.role !== pkg.jobSnapshot.role ||
-      job.responsibilities !== pkg.jobSnapshot.responsibilities ||
-      job.requirements !== pkg.jobSnapshot.requirements ||
-      job.preferred !== pkg.jobSnapshot.preferred ||
-      resume.name !== snap.name ||
-      resume.years !== snap.years ||
-      JSON.stringify(resume.experiences) !== JSON.stringify(snap.experiences) ||
-      JSON.stringify(resume.skills) !== JSON.stringify(snap.skills)
-    );
-  }, [job, pkg, resume]);
-
-  const upsertTracker = useCallback((next: JobPackage) => {
-    setTracker((prev) => {
-      const found = prev.find((entry) => entry.packageId === next.id || (entry.company === next.company && entry.role === next.role));
-      if (found) {
-        return prev.map((entry) =>
-          entry.id === found.id
-            ? {
-                ...entry,
-                packageId: next.id,
-                score: next.match.score,
-                deadline: entry.deadline || next.jobSnapshot.deadline,
-                updatedAt: new Date().toISOString(),
-              }
-            : entry,
-        );
-      }
-      return [
-        makeEntry({
-          company: next.company,
-          role: next.role,
-          packageId: next.id,
-          score: next.match.score,
-          deadline: next.jobSnapshot.deadline,
-        }),
-        ...prev,
-      ];
-    });
-  }, []);
-
-  const generate = useCallback(
-    async (override?: { job?: JobPosting; resume?: MasterResume; forceAi?: boolean }) => {
-      const activeJob = override?.job ?? job;
-      const activeResume = override?.resume ?? resume;
-      if (!activeJob.company.trim() || !activeJob.role.trim()) {
-        notify("회사와 직무를 먼저 입력하세요.", "warn");
-        setInputTab("job");
-        setView("studio");
-        setMobilePanel("input");
-        return;
-      }
-      if (!activeJob.responsibilities.trim() && !activeJob.requirements.trim()) {
-        notify("공고의 담당 업무나 자격 요건을 먼저 넣어 주세요.", "warn");
-        setInputTab("job");
-        setView("studio");
-        setMobilePanel("input");
-        return;
-      }
-      const bulletCount = activeResume.experiences.reduce((sum, exp) => sum + exp.bullets.filter((b) => b.text.trim().length > 5).length, 0);
-      if (bulletCount === 0) {
-        notify("경력 원본에 문장을 한 개 이상 넣어 주세요.", "warn");
-        setInputTab("resume");
-        setView("studio");
-        setMobilePanel("input");
-        return;
-      }
-
-      setRunning(true);
-      setStep(0);
-      setView("studio");
-      setMobilePanel("studio");
-      for (let i = 0; i < RUN_STEPS.length; i += 1) {
-        setStep(i);
-        await sleep(i === 0 ? 200 : 160);
-      }
-
-      const result = analyze(activeResume, activeJob);
-      let next: JobPackage = {
-        id: `pkg-${Date.now()}`,
-        createdAt: new Date().toISOString(),
-        company: activeJob.company.trim(),
-        role: activeJob.role.trim(),
-        employmentType: activeJob.employmentType,
-        location: activeJob.location,
-        resumeName: activeResume.name,
-        resumeHeadline: activeResume.headline,
-        years: activeResume.years,
-        engine: "rule",
-        match: result.match,
-        summary: result.summary,
-        rewrites: result.rewrites,
-        appeals: result.appeals,
-        questions: result.questions,
-        jobKeywords: result.jobKeywords,
-        resumeSnapshot: activeResume,
-        jobSnapshot: activeJob,
-        intro: buildLocalIntro(activeResume, activeJob, result.match, introVariant),
-        reverse: buildLocalReverse(activeResume, activeJob, result.match),
-        feedback: [],
-      };
-
-      if (aiStatus.kind === "live" || override?.forceAi) {
-        try {
-          const enriched = await enrichWithAi(next, aiConfig);
-          next = enriched.pkg;
-          if (enriched.warnings.length) {
-            notify(`AI 분석 완료 — 근거가 확인되지 않은 항목 ${enriched.warnings.length}건을 제외했습니다.`, "warn");
-          } else {
-            notify("실시간 AI 분석을 반영했습니다.");
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "AI 호출에 실패했습니다";
-          notify(`${message} — 규칙 엔진 결과를 표시합니다.`, "warn");
-          if (error instanceof AiError && error.code === "no_key") {
-            setAiStatus((prev) => ({ ...prev, kind: "local", reason: "no_key", message: "서버에 API 키가 없습니다" }));
-          }
-        }
-      }
-
-      setPkg(next);
-      setSaved((prev) => addPackage(prev, next));
-      upsertTracker(next);
-      setTab("match");
-      setRunning(false);
+  const applyResume = useCallback(
+    (next: MasterResume, meta: ResumeMeta) => {
+      setResume(next);
+      setResumeMeta(meta);
+      persistResume(next);
+      persistResumeMeta(meta);
     },
-    [aiConfig, aiStatus.kind, introVariant, job, notify, resume, upsertTracker],
+    [],
   );
 
-  const reanalyzeWithAi = useCallback(async () => {
-    const status = await refreshAi();
-    if (status.kind !== "live") {
-      notify("AI 서버에 연결되지 않았습니다. AI 연결 설정에서 키를 확인하세요. 규칙 엔진 결과는 그대로 유지됩니다.", "warn");
-      setAiOpen(true);
-      return;
-    }
-    if (!pkg) {
-      await generate({ forceAi: true });
-      return;
-    }
-    setRegenerating(true);
-    try {
-      const enriched = await enrichWithAi(pkg, aiConfig);
-      setPkg(enriched.pkg);
-      setSaved((prev) => updatePackage(prev, enriched.pkg));
-      notify(
-        enriched.warnings.length ? `AI 분석 완료 — 근거가 확인되지 않은 항목 ${enriched.warnings.length}건을 제외했습니다.` : "AI로 다시 분석했습니다.",
-        enriched.warnings.length ? "warn" : "ok",
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "AI 호출에 실패했습니다";
-      notify(`${message} — 기존 결과를 유지합니다.`, "warn");
-      if (error instanceof AiError && error.code === "no_key") {
-        setAiStatus((prev) => ({ ...prev, kind: "local", reason: "no_key", message: "서버에 API 키가 없습니다" }));
-      }
-    } finally {
-      setRegenerating(false);
-    }
-  }, [aiConfig, generate, notify, pkg, refreshAi]);
-
-  const regenerateIntro = useCallback(async () => {
-    if (!pkg) return;
-    const variant = introVariant + 1;
-    setIntroVariant(variant);
-    if (aiStatus.kind === "live") {
-      setRegenerating(true);
-      try {
-        const enriched = await enrichWithAi(pkg, aiConfig);
-        setPkg(enriched.pkg);
-        setSaved((prev) => updatePackage(prev, enriched.pkg));
-        notify("AI로 1분 자기소개를 다시 만들었습니다.");
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "AI 호출에 실패했습니다";
-        notify(`${message} — 규칙 엔진으로 대신 만들었습니다.`, "warn");
-        setPkg({ ...pkg, intro: buildLocalIntro(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match, variant) });
-      } finally {
-        setRegenerating(false);
-      }
-      return;
-    }
-    setPkg({ ...pkg, intro: buildLocalIntro(pkg.resumeSnapshot, pkg.jobSnapshot, pkg.match, variant) });
-    notify("규칙 엔진으로 다시 만들었습니다. AI를 연결하면 문장이 더 자연스러워집니다.", "warn");
-  }, [aiConfig, aiStatus.kind, introVariant, notify, pkg]);
-
-  const handleSampleJob = (sample: JobPosting) => {
-    setJob(sample);
-    setActiveSampleJob(sample.id);
-    setInputTab("job");
-    void generate({ job: sample });
-  };
-
-  const handleSampleResume = (sample: MasterResume) => {
-    setResume(sample);
-    setActiveSampleResume(sample.id);
-    notify(`경력 원본을 ‘${sample.name}’ 예시로 바꿨습니다. 다시 생성하면 반영됩니다.`);
-  };
-
-  const handleJobChange = (next: JobPosting) => {
-    setJob(next);
-    setActiveSampleJob(SAMPLE_JOBS.some((s) => s.id === next.id) ? next.id : null);
-  };
-
-  const handleResumeChange = (next: MasterResume) => {
-    setResume(next);
-    setActiveSampleResume(null);
-  };
-
-  const blankInputs = () => {
-    setResume(emptyResume());
-    setJob(emptyJob());
-    setActiveSampleResume(null);
-    setActiveSampleJob(null);
-    setPkg(null);
-    setView("studio");
-    setInputTab("job");
-    setMobilePanel("input");
-    notify("예시를 비웠습니다. 내 공고와 이력서를 넣어 주세요.", "warn");
-  };
-
-  const openImport = useCallback(
+  const importResumeFile = useCallback(
     async (file: File) => {
+      setResumeBusy(file.name.toLowerCase().endsWith(".pdf") ? "PDF에서 글자를 읽는 중" : "이력서 파일을 읽는 중");
       try {
-        const text = await readFileText(file);
-        if (!text.trim()) {
-          notify("파일이 비어 있습니다.", "warn");
+        let text = "";
+        if (file.name.toLowerCase().endsWith(".pdf")) {
+          const result = await extractPdfText(await file.arrayBuffer());
+          if (!result.ok) {
+            notify(`${result.reason ?? "PDF를 읽지 못했습니다"} PDF 대신 .txt/.md로 저장해 올리거나 ‘직접 입력’을 사용하세요.`, "err");
+            return;
+          }
+          text = result.text;
+        } else {
+          text = await readFileText(file);
+        }
+        if (text.trim().length < 40) {
+          notify("파일이 비어 있습니다. 내용을 확인해 주세요.", "warn");
           return;
         }
         const kind = guessKind(text);
-        setImportState({ fileName: file.name, text, kind, preview: buildPreview(text, kind) });
+        const parsed = buildPreview(text, kind);
+        if (kind === "job") {
+          notify("이 파일은 공고처럼 보입니다. 공고는 URL이나 아래 ‘본문 붙여넣기’로 넣어 주세요.", "warn");
+        }
+        const bullets = resumeBulletCount(parsed.resume);
+        if (bullets === 0) {
+          applyResume(parsed.resume, { source: "file", fileName: file.name, savedAt: new Date().toISOString(), note: "문장을 찾지 못함" });
+          setResumeOpen(true);
+          notify("경력 문장을 나누지 못했습니다. 편집 창에서 회사·직함과 문장을 확인해 주세요.", "warn");
+          return;
+        }
+        applyResume(parsed.resume, {
+          source: "file",
+          fileName: file.name,
+          savedAt: new Date().toISOString(),
+          note: `${parsed.summary}${parsed.warnings.length ? ` · ${parsed.warnings[0]}` : ""}`,
+        });
+        setResumeOpen(false);
+        notify(`이력서를 저장했습니다 — 경력 ${parsed.resume.experiences.length}개 · 문장 ${bullets}개`, parsed.warnings.length ? "warn" : "ok");
       } catch {
-        notify("파일을 읽지 못했습니다. .txt 또는 .md 파일인지 확인하세요.", "err");
+        notify("파일을 읽지 못했습니다. .txt/.md/.pdf인지 확인해 주세요.", "err");
+      } finally {
+        setResumeBusy(null);
       }
     },
-    [notify],
+    [applyResume, notify],
   );
 
-  const changeImportKind = (kind: ImportKind) =>
-    setImportState((prev) => (prev ? { ...prev, kind, preview: buildPreview(prev.text, kind) } : prev));
+  const useSampleResume = useCallback(() => {
+    const sample = SAMPLE_RESUMES[0];
+    applyResume(sample, { source: "sample", savedAt: new Date().toISOString(), note: "가상 인물 샘플" });
+    setResumeOpen(false);
+    notify("가상 인물 ‘서하늘’ 샘플을 넣었습니다. 실제 지원 전에 내 이력서로 바꿔 주세요.", "warn");
+  }, [applyResume, notify]);
 
-  const applyImport = () => {
-    if (!importState) return;
-    const parsed = importState.preview;
-    setImportState(null);
-    setView("studio");
-    setMobilePanel("input");
-    if (parsed.kind === "job") {
-      setJob(parsed.job);
-      setActiveSampleJob(null);
-      setInputTab("job");
-      notify(`공고를 불러왔습니다 — ${parsed.summary}`, parsed.warnings.length ? "warn" : "ok");
-    } else {
-      setResume(parsed.resume);
-      setActiveSampleResume(null);
-      setInputTab("resume");
-      notify(`이력서를 불러왔습니다 — ${parsed.summary}`, parsed.warnings.length ? "warn" : "ok");
+  /* ── 공고 URL ── */
+  const fetchJob = useCallback(async () => {
+    if (!jobUrl.trim()) {
+      notify("공고 URL을 붙여넣어 주세요.", "warn");
+      return;
     }
-  };
+    setFetching(true);
+    setJobError(null);
+    try {
+      const result = await fetchJobFromUrl(jobUrl, aiConfig);
+      setJob(result.job);
+      setJobSource({
+        kind: "url",
+        url: result.meta.url,
+        site: result.meta.site,
+        fetchedAt: new Date().toISOString(),
+        note: result.meta.note,
+      });
+      const duties = result.job.responsibilities.split("\n").filter(Boolean).length;
+      const reqs = result.job.requirements.split("\n").filter(Boolean).length;
+      notify(
+        `${result.meta.site}에서 공고를 읽었습니다 — 담당 업무 ${duties}줄 · 자격 요건 ${reqs}줄${result.engine === "rule" ? " (규칙 정리)" : ""}`,
+        duties + reqs === 0 ? "warn" : "ok",
+      );
+    } catch (error) {
+      const failure = error instanceof JobUrlError ? error : new JobUrlError("unknown", "공고를 불러오지 못했습니다.");
+      setJobError({ code: failure.code, message: failure.message, site: failure.site });
+      setPasteOpen(true);
+      if (failure.excerpt && !pasteText.trim()) setPasteText(failure.excerpt.slice(0, DESCRIPTION_LIMIT));
+      notify(failure.message, "err");
+    } finally {
+      setFetching(false);
+    }
+  }, [aiConfig, jobUrl, notify, pasteText]);
 
-  const toggleRewrite = (id: string) => {
-    setPkg((prev) =>
-      prev ? { ...prev, rewrites: prev.rewrites.map((r) => (r.id === id ? { ...r, adopted: !r.adopted } : r)) } : prev,
+  const analyzePaste = useCallback(() => {
+    if (pasteText.trim().length < 40) {
+      notify("공고 본문을 조금 더 붙여넣어 주세요.", "warn");
+      return;
+    }
+    const parsed = parseJobText(pasteText);
+    const filled = Boolean(parsed.job.responsibilities || parsed.job.requirements || parsed.job.preferred);
+    setJob(parsed.job);
+    setJobSource({ kind: "paste", site: "붙여넣은 본문", fetchedAt: new Date().toISOString() });
+    setJobError(null);
+    setPasteOpen(false);
+    notify(
+      filled
+        ? `본문을 문단으로 나눴습니다 — 담당 업무 ${parsed.job.responsibilities.split("\n").filter(Boolean).length}줄`
+        : "문단 제목을 찾지 못해 전체 본문을 담당 업무로 넣었습니다. 편하게 분석해 보세요.",
+      filled ? "ok" : "warn",
     );
-  };
+  }, [notify, pasteText]);
 
-  const toggleSummary = () => {
-    setPkg((prev) => (prev ? { ...prev, summary: { ...prev.summary, adopted: !prev.summary.adopted } } : prev));
-  };
+  const clearJob = useCallback(() => {
+    setJob(null);
+    setJobSource(null);
+    setJobUrl("");
+    setJobError(null);
+    setPasteText("");
+    setPasteOpen(false);
+    setPkg(null);
+  }, []);
 
-  const toggleAll = (adopted: boolean) => {
-    setPkg((prev) => (prev ? { ...prev, rewrites: prev.rewrites.map((r) => ({ ...r, adopted })) } : prev));
-    notify(adopted ? "모든 리라이트를 반영했습니다." : "모든 리라이트를 해제했습니다.", adopted ? "ok" : "warn");
-  };
+  /* ── 패키지 생성 ── */
+  const buildPackage = useCallback(
+    async (options?: { forceAi?: boolean }) => {
+      if (!job) {
+        notify("공고를 먼저 불러와 주세요.", "warn");
+        return;
+      }
+      if (!resumeReady(resume)) {
+        notify("내 이력서를 먼저 등록해 주세요.", "warn");
+        setResumeOpen(true);
+        return;
+      }
+      if (!job.responsibilities.trim() && !job.requirements.trim()) {
+        notify("공고의 담당 업무나 자격 요건이 비어 있습니다. URL을 다시 불러오거나 본문을 붙여넣어 주세요.", "warn");
+        setPasteOpen(true);
+        return;
+      }
 
-  const updateStar = (id: string, key: keyof StarAnswer, value: string) => {
-    setPkg((prev) =>
-      prev
-        ? {
-            ...prev,
-            questions: prev.questions.map((q) => (q.id === id ? { ...q, edited: true, star: { ...q.star, [key]: value } } : q)),
+      setGenerating(true);
+      try {
+        const result = analyze(resume, job);
+        const base: JobPackage = {
+          id: `pkg-${Date.now().toString(36)}`,
+          createdAt: new Date().toISOString(),
+          company: job.company.trim() || "회사 미확인",
+          role: job.role.trim() || "직무 미확인",
+          employmentType: job.employmentType,
+          location: job.location,
+          resumeName: resume.name,
+          resumeHeadline: resume.headline,
+          years: resume.years,
+          engine: "rule",
+          match: result.match,
+          summary: result.summary,
+          rewrites: result.rewrites,
+          appeals: result.appeals,
+          questions: buildLocalAnswerSet(result.questions, resume, job),
+          jobKeywords: result.jobKeywords,
+          resumeSnapshot: resume,
+          jobSnapshot: job,
+          intro: buildLocalIntro(resume, job, result.match, 0, prefs.priority ?? undefined),
+          reverse: buildLocalReverse(resume, job, result.match, prefs.priority ?? undefined),
+          feedback: [],
+          source: jobSource ?? undefined,
+          priority: prefs.priority ?? undefined,
+          targetSalary: prefs.targetSalary,
+          onePoint: buildLocalOnePoint(resume, job, result.match, prefs.priority ?? undefined),
+          negotiation: buildLocalNegotiation({ job, match: result.match, priority: prefs.priority ?? undefined, targetSalary: prefs.targetSalary }),
+        };
+
+        let next = base;
+        if (aiStatus.kind === "live" || options?.forceAi) {
+          try {
+            const enriched = await enrichWithAi(base, aiConfig);
+            next = enriched.pkg;
+            next.questions = buildLocalAnswerSet(next.questions, resume, job);
+            notify(
+              enriched.warnings.length
+                ? `AI 분석 완료 — 근거가 확인되지 않은 항목 ${enriched.warnings.length}건을 제외했습니다.`
+                : "AI 분석을 반영했습니다.",
+              enriched.warnings.length ? "warn" : "ok",
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "AI 호출에 실패했습니다";
+            notify(`${message} — 규칙 엔진 결과를 표시합니다.`, "warn");
+            if (error instanceof AiError && error.code === "no_key") {
+              setAiStatus((prev) => ({ ...prev, kind: "local", reason: "no_key", message: "서버에 API 키가 없습니다" }));
+            }
           }
-        : prev,
-    );
-  };
+        }
 
-  const resetStar = (id: string) => {
-    setPkg((prev) => {
-      if (!prev) return prev;
-      const seed = analyze(prev.resumeSnapshot, prev.jobSnapshot).questions.find((q) => q.id === id);
-      if (!seed) return prev;
-      return { ...prev, questions: prev.questions.map((q) => (q.id === id ? { ...q, edited: false, star: seed.star } : q)) };
-    });
-    notify("답변을 처음 제안으로 되돌렸습니다.", "warn");
-  };
+        setPkg(next);
+        setSaved((prev) => addPackage(prev, next));
+        setTracker((prev) => {
+          const found = prev.find((entry) => entry.company === next.company && entry.role === next.role);
+          if (found) {
+            return prev.map((entry) =>
+              entry.id === found.id
+                ? { ...entry, packageId: next.id, score: next.match.score, deadline: entry.deadline || next.jobSnapshot.deadline, updatedAt: new Date().toISOString() }
+                : entry,
+            );
+          }
+          return [makeEntry({ company: next.company, role: next.role, packageId: next.id, score: next.match.score, deadline: next.jobSnapshot.deadline }), ...prev];
+        });
+        setView("studio");
+      } finally {
+        setGenerating(false);
+      }
+    },
+    [aiConfig, aiStatus.kind, job, jobSource, notify, prefs.priority, prefs.targetSalary, resume],
+  );
 
-  const addFeedback = (feedback: InterviewFeedback) => {
-    setPkg((prev) => (prev ? { ...prev, feedback: [feedback, ...(prev.feedback ?? [])].slice(0, 5) } : prev));
-  };
+  const regenerate = useCallback(async () => {
+    if (!pkg) return;
+    setRegenerating(true);
+    try {
+      const status = await refreshAi();
+      if (status.kind !== "live") {
+        notify("AI 서버에 연결되지 않았습니다. 규칙 엔진 결과는 그대로 유지됩니다.", "warn");
+        setAiOpen(true);
+        return;
+      }
+      const enriched = await enrichWithAi(pkg, aiConfig);
+      const next = { ...enriched.pkg, questions: buildLocalAnswerSet(enriched.pkg.questions, pkg.resumeSnapshot, pkg.jobSnapshot) };
+      setPkg(next);
+      setSaved((prev) => updatePackage(prev, next));
+      notify(enriched.warnings.length ? `AI 분석 완료 — 근거 미확인 ${enriched.warnings.length}건 제외` : "AI로 다시 분석했습니다.", enriched.warnings.length ? "warn" : "ok");
+    } catch (error) {
+      notify(`${error instanceof Error ? error.message : "AI 호출 실패"} — 기존 결과를 유지합니다.`, "warn");
+    } finally {
+      setRegenerating(false);
+    }
+  }, [aiConfig, notify, pkg, refreshAi]);
+
+  const recommend = useCallback(
+    async (useAi: boolean) => {
+      if (!resumeReady(resume)) return;
+      if (!useAi || aiStatus.kind !== "live") {
+        setRecommendation(recommendLocal(resume));
+        notify("이력서에서 포지션·연봉 범위·타깃 기업군을 다시 계산했습니다.");
+        return;
+      }
+      setRecommending(true);
+      try {
+        const { data, model } = await requestAiRecommendation({
+          resume,
+          config: aiConfig,
+          priorityLabel: priorityOf(prefs.priority)?.label ?? "",
+        });
+        const sources = [
+          resume.headline,
+          resume.summary,
+          resume.skills.join(" "),
+          resume.industries.join(" "),
+          ...resume.experiences.flatMap((exp) => [exp.company, exp.role, ...exp.bullets.map((bullet) => bullet.text)]),
+        ].filter(Boolean);
+        const titles = (data.titles ?? [])
+          .map((item) => ({ title: (item.title ?? "").trim(), why: (item.why ?? "").trim() }))
+          .filter((item) => item.title.length > 2 && item.why.length > 4 && guardText(item.why, sources).ok)
+          .slice(0, 3);
+        const targets = (data.targets ?? [])
+          .map((item) => ({ group: (item.group ?? "").trim(), why: (item.why ?? "").trim() }))
+          .filter((item) => item.group.length > 2 && item.why.length > 4 && guardText(item.why, sources).ok)
+          .slice(0, 3);
+        const min = typeof data.salaryBand?.min === "number" ? Math.max(2_000, Math.min(20_000, Math.round(data.salaryBand.min))) : 0;
+        const max = typeof data.salaryBand?.max === "number" ? Math.max(min + 200, Math.min(20_000, Math.round(data.salaryBand.max))) : 0;
+        const fallback = recommendLocal(resume);
+        const next: ResumeRecommendation = {
+          titles: titles.length >= 2 ? titles : fallback.titles,
+          salaryBand:
+            min > 0 && max > min
+              ? { min, max, basis: (data.salaryBand?.basis ?? "").trim() || fallback.salaryBand?.basis || "추정" }
+              : fallback.salaryBand,
+          targets: targets.length >= 2 ? targets : fallback.targets,
+          source: "ai",
+          model,
+        };
+        setRecommendation(next);
+        notify("AI가 이력서를 읽고 추천 방향을 다시 잡았습니다.");
+      } catch (error) {
+        notify(`${error instanceof Error ? error.message : "AI 추천 실패"} — 규칙 추천을 유지합니다.`, "warn");
+      } finally {
+        setRecommending(false);
+      }
+    },
+    [aiConfig, aiStatus.kind, notify, prefs.priority, resume],
+  );
+
+  const addFeedback = useCallback((feedback: InterviewFeedback) => {
+    setPkg((prev) => (prev ? { ...prev, feedback: [feedback, ...(prev.feedback ?? [])].slice(0, 8) } : prev));
+  }, []);
 
   const loadPackage = (next: JobPackage) => {
     setPkg(next);
     setJob(next.jobSnapshot);
-    setActiveSampleJob(null);
+    setJobSource(next.source ?? { kind: "paste", site: "저장된 공고" });
+    setPrefs((prev) => ({ ...prev, priority: next.priority ?? prev.priority, targetSalary: next.targetSalary ?? prev.targetSalary }));
     setView("studio");
-    setTab("match");
-    setMobilePanel("studio");
     notify(`${next.company} 패키지를 열었습니다.`);
   };
 
@@ -486,12 +469,6 @@ export default function App() {
     setSaved((prev) => removePackage(prev, id));
     if (pkg?.id === id) setPkg(null);
     notify("패키지를 삭제했습니다.", "warn");
-  };
-
-  const clearAll = () => {
-    setSaved(clearPackages());
-    setPkg(null);
-    notify("히스토리를 모두 비웠습니다.", "warn");
   };
 
   const saveAi = (config: AiConfig) => {
@@ -508,92 +485,99 @@ export default function App() {
     notify("Markdown 패키지를 내려받았습니다.");
   };
 
+  const startNewJob = () => {
+    clearJob();
+    setView("studio");
+    notify("새 공고를 넣을 수 있습니다. 등록한 이력서는 그대로 남아 있습니다.");
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        if (!running) void generate();
-      }
       if (event.key === "Escape") {
         setAiOpen(false);
         setHelpOpen(false);
-        setImportState(null);
+        setResumeOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [generate, running]);
+  }, []);
 
-  const panelVisible = (panel: MobilePanel) => (mobilePanel === panel ? "block" : "hidden");
-
-  const tabs = useMemo(() => {
-    if (!pkg) return [];
-    const adopted = pkg.rewrites.filter((r) => r.adopted).length;
-    const answered = pkg.questions.filter((q) => q.edited).length;
-    const gapCount = pkg.match.keywords.filter((k) => k.status !== "matched").length;
-    return [
-      { id: "match" as TabId, label: "적합도·갭", short: "적합도", icon: GaugeIcon, count: gapCount },
-      { id: "rewrite" as TabId, label: "경력 리라이트", short: "리라이트", icon: PenLine, count: adopted },
-      { id: "interview" as TabId, label: "면접", short: "면접", icon: Mic, count: answered },
-      { id: "pitch" as TabId, label: "1분 소개", short: "1분 소개", icon: Quote, count: 0 },
-      { id: "export" as TabId, label: "내보내기", short: "내보내기", icon: Package, count: 0 },
-    ];
-  }, [pkg]);
-
-  const railNode = (
-    <Rail
-      pkg={pkg}
-      saved={saved}
-      entries={tracker}
-      onLoad={loadPackage}
-      onOpenHistory={() => setView("history")}
-      onOpenTracker={() => setView("tracker")}
-    />
+  const setupProps = useMemo(
+    () => ({
+      resume,
+      resumeMeta,
+      onResumeFile: (file: File) => void importResumeFile(file),
+      onOpenResume: () => setResumeOpen(true),
+      onSampleResume: useSampleResume,
+      resumeBusy,
+      job,
+      jobSource,
+      jobUrl,
+      onJobUrl: setJobUrl,
+      onFetchJob: () => void fetchJob(),
+      fetching,
+      jobError,
+      pasteOpen,
+      onPasteOpen: setPasteOpen,
+      pasteText,
+      onPasteText: setPasteText,
+      onAnalyzePaste: analyzePaste,
+      onClearJob: clearJob,
+      priority: prefs.priority,
+      onPriority: (id: PriorityId) => setPrefs((prev) => ({ ...prev, priority: id })),
+      targetSalary: prefs.targetSalary,
+      onTargetSalary: (value: number | null) => setPrefs((prev) => ({ ...prev, targetSalary: value })),
+      recommendation,
+      onRecommend: (useAi: boolean) => void recommend(useAi),
+      recommending,
+      onGenerate: () => void buildPackage(),
+      generating,
+      aiStatus,
+    }),
+    [
+      aiStatus,
+      analyzePaste,
+      buildPackage,
+      clearJob,
+      fetchJob,
+      fetching,
+      generating,
+      importResumeFile,
+      job,
+      jobError,
+      jobSource,
+      jobUrl,
+      pasteOpen,
+      pasteText,
+      prefs.priority,
+      prefs.targetSalary,
+      recommend,
+      recommendation,
+      recommending,
+      resume,
+      resumeBusy,
+      resumeMeta,
+      useSampleResume,
+    ],
   );
-
-  const mobileNav: { id: "input" | "studio" | "rail" | "tracker"; label: string; icon: typeof FileText }[] = [
-    { id: "input", label: "공고·경력", icon: FileText },
-    { id: "studio", label: "패키지", icon: Package },
-    { id: "rail", label: "현황", icon: GaugeIcon },
-    { id: "tracker", label: "지원", icon: ListChecks },
-  ];
 
   return (
     <>
       <div className="min-h-screen bg-paper print:hidden">
-        <Sidebar
-          view={view}
-          resumeInitial={resume.name.trim().slice(0, 1) || "J"}
-          onChangeView={(next) => {
-            setView(next);
-            if (next === "studio") setMobilePanel("input");
-          }}
-          onOpenApi={() => setAiOpen(true)}
-          onOpenHelp={() => setHelpOpen(true)}
-        />
-
         <TopBar
           view={view}
-          company={pkg?.company ?? job.company}
-          role={pkg?.role ?? job.role}
-          mode={aiStatus.kind}
-          model={aiStatus.model}
+          onChangeView={setView}
+          aiStatus={aiStatus}
           onOpenAi={() => setAiOpen(true)}
-          onOpenHistory={() => setView(view === "history" ? "studio" : "history")}
-          onOpenTracker={() => setView("tracker")}
-          onOpenGuide={() => setHelpOpen(true)}
+          onOpenHelp={() => setHelpOpen(true)}
+          hasPackage={Boolean(pkg)}
         />
 
-        <main className="lg:pl-[68px]">
-          <div className="mx-auto w-full max-w-[1640px] px-3 pb-24 pt-3 sm:px-5 sm:pt-4 xl:pb-6">
+        <main>
+          <div className="mx-auto w-full max-w-[1180px] px-3 pb-16 pt-3 sm:px-5 sm:pt-4">
             {view === "history" ? (
-              <HistoryView
-                packages={saved}
-                onLoad={loadPackage}
-                onDelete={deletePackage}
-                onClear={clearAll}
-                onBack={() => setView("studio")}
-              />
+              <HistoryView packages={saved} onLoad={loadPackage} onDelete={deletePackage} onClear={() => setSaved(clearPackages())} onBack={() => setView("studio")} />
             ) : view === "tracker" ? (
               <TrackerView
                 entries={tracker}
@@ -607,243 +591,56 @@ export default function App() {
                 onLoadPackage={loadPackage}
                 onOpenStudio={() => setView("studio")}
               />
+            ) : pkg ? (
+              <ResultFlow
+                pkg={pkg}
+                aiStatus={aiStatus}
+                config={aiConfig}
+                priority={pkg.priority ?? prefs.priority}
+                regenerating={regenerating}
+                onFeedback={addFeedback}
+                onNotify={notify}
+                onRegenerate={() => void regenerate()}
+                onExport={exportMarkdown}
+                onPrint={() => window.print()}
+                onNewJob={startNewJob}
+                onOpenTracker={() => setView("tracker")}
+              />
             ) : (
-              <>
-                <ModeBanner
-                  status={aiStatus}
-                  running={running || regenerating}
-                  hasPackage={Boolean(pkg)}
-                  onReanalyze={() => void reanalyzeWithAi()}
-                  onOpenSettings={() => setAiOpen(true)}
-                />
-
-                <div className="grid gap-3 lg:grid-cols-[338px_minmax(0,1fr)] xl:grid-cols-[338px_minmax(0,1fr)_294px]">
-                  <div className={cx(panelVisible("input"), "lg:block")}>
-                    <div className="lg:sticky lg:top-[72px] lg:h-[calc(100vh-88px)]">
-                      <InputPanel
-                        job={job}
-                        resume={resume}
-                        inputTab={inputTab}
-                        onInputTab={setInputTab}
-                        onJob={handleJobChange}
-                        onResume={handleResumeChange}
-                        onSampleResume={handleSampleResume}
-                        onBlank={blankInputs}
-                        onFile={(file) => void openImport(file)}
-                        activeSampleJob={activeSampleJob}
-                        activeSampleResume={activeSampleResume}
-                        running={running}
-                        step={step}
-                        onGenerate={() => void generate()}
-                        aiStatus={aiStatus}
-                        onOpenApi={() => setAiOpen(true)}
-                      />
-                    </div>
-                  </div>
-
-                  <div className={cx(panelVisible("studio"), "min-w-0 lg:block")}>
-                    {!pkg ? (
-                      <EmptyState
-                        onSample={handleSampleJob}
-                        onBlank={blankInputs}
-                        onFile={(file) => void openImport(file)}
-                      />
-                    ) : (
-                      <div className="space-y-3">
-                        <Card className="overflow-hidden">
-                          <div className="flex flex-wrap items-start gap-3 px-4 py-3.5">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                <h1 className="truncate text-[15px] font-semibold tracking-[-0.025em]">{pkg.company}</h1>
-                                <span className="chip border border-line bg-surface text-ink-2">{pkg.role}</span>
-                                <span className="chip bg-paper-deep text-muted">{pkg.employmentType}</span>
-                                {pkg.location && <span className="hidden chip bg-paper-deep text-muted sm:inline-flex">{pkg.location}</span>}
-                                <span
-                                  className={cx("hidden chip sm:inline-flex", pkg.engine === "ai" ? "bg-accent-soft text-accent-deep" : "bg-paper-deep text-muted")}
-                                  data-testid="package-engine"
-                                >
-                                  {pkg.engine === "ai" ? `AI 분석${pkg.aiModel ? ` · ${pkg.aiModel}` : ""}` : "규칙 엔진"}
-                                </span>
-                                {pkg.aiWarnings && pkg.aiWarnings.length > 0 && (
-                                  <span className="chip bg-warn-soft text-warn" title={pkg.aiWarnings.join("\n")}>
-                                    근거 확인 제외 {pkg.aiWarnings.length}
-                                  </span>
-                                )}
-                                {pkg.resumeSnapshot.id !== resume.id && <span className="chip bg-info-soft text-info">패키지 기준 · {pkg.resumeName}</span>}
-                              </div>
-                              <p className="mt-1 line-clamp-2 text-[10.5px] leading-relaxed text-muted sm:line-clamp-1">
-                                {pkg.match.summaryLine} · {new Date(pkg.createdAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 생성
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <button type="button" onClick={exportMarkdown} className="btn btn-outline h-8 px-2.5 text-[11px]">
-                                <Download size={12} />
-                                <span className="hidden sm:inline">Markdown</span>
-                              </button>
-                              <button type="button" onClick={() => window.print()} className="btn btn-outline h-8 px-2.5 text-[11px]" title="면접 준비 시트 인쇄">
-                                <Printer size={12} />
-                              </button>
-                              <button type="button" onClick={() => void generate()} className="btn btn-primary h-8 px-2.5 text-[11px]" title="현재 입력으로 다시 생성">
-                                <RefreshCw size={12} />
-                                <span className="hidden sm:inline">다시 생성</span>
-                              </button>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 overflow-x-auto border-t border-line px-2 py-1.5">
-                            {tabs.map((item) => {
-                              const active = tab === item.id;
-                              return (
-                                <button
-                                  key={item.id}
-                                  type="button"
-                                  onClick={() => setTab(item.id)}
-                                  className={cx(
-                                    "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-1.5 py-1.5 text-[10.5px] font-semibold transition-colors sm:px-2.5 sm:text-[11.5px]",
-                                    active ? "bg-ink text-white" : "text-muted hover:bg-paper-deep hover:text-ink",
-                                  )}
-                                >
-                                  <item.icon size={13} />
-                                  <span className="sm:hidden">{item.short}</span>
-                                  <span className="hidden sm:inline">{item.label}</span>
-                                  {item.count > 0 && (
-                                    <span className={cx("num hidden text-[9.5px] sm:inline", active ? "text-white/60" : "text-faint")}>{item.count}</span>
-                                  )}
-                                </button>
-                              );
-                            })}
-                            <div className="ml-auto hidden shrink-0 items-center gap-1.5 pr-1 sm:flex">
-                              <span
-                                className="num rounded-md px-1.5 py-0.5 text-[12px] font-semibold"
-                                style={{ color: scoreColor(pkg.match.score), background: `${scoreColor(pkg.match.score)}10` }}
-                              >
-                                {pkg.match.score}
-                              </span>
-                              <span className="text-[9px] text-faint">/100</span>
-                            </div>
-                          </div>
-                        </Card>
-
-                        {stale && (
-                          <div className="flex flex-wrap items-center gap-2 rounded-xl border border-warn/25 bg-warn-soft px-3.5 py-2.5">
-                            <span className="text-[11px] font-medium text-warn">공고나 경력 원본이 수정되었습니다. 결과는 마지막 생성 기준입니다.</span>
-                            <button
-                              type="button"
-                              onClick={() => void generate()}
-                              className="btn btn-outline ml-auto h-7 border-warn/30 bg-white/70 px-2.5 text-[10.5px] text-warn"
-                            >
-                              <Sparkles size={11} /> 다시 생성
-                            </button>
-                          </div>
-                        )}
-
-                        <div className="animate-rise">
-                          {tab === "match" && <MatchTab match={pkg.match} job={pkg.jobSnapshot} aiFit={pkg.aiFit} />}
-                          {tab === "rewrite" && projection && (
-                            <RewriteTab
-                              pkg={pkg}
-                              projection={projection}
-                              onToggle={toggleRewrite}
-                              onToggleAll={toggleAll}
-                              onToggleSummary={toggleSummary}
-                            />
-                          )}
-                          {tab === "interview" && (
-                            <InterviewTab
-                              pkg={pkg}
-                              aiStatus={aiStatus}
-                              config={aiConfig}
-                              onStar={updateStar}
-                              onReset={resetStar}
-                              onFeedback={addFeedback}
-                              onNotify={notify}
-                            />
-                          )}
-                          {tab === "pitch" && (
-                            <PitchTab pkg={pkg} aiStatus={aiStatus} regenerating={regenerating} onRegenerate={() => void regenerateIntro()} />
-                          )}
-                          {tab === "export" && <ExportTab pkg={pkg} saved={saved} onLoad={loadPackage} onOpenHistory={() => setView("history")} />}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={cx(panelVisible("rail"), "min-w-0 xl:block")}>
-                    <div className="xl:sticky xl:top-[72px]">{railNode}</div>
-                  </div>
-                </div>
-              </>
-            )}
-
-            {view === "studio" && (
-              <div className={cx("mt-3 lg:hidden", mobilePanel === "rail" ? "block" : "hidden")}>
-                <div className="grid gap-3 sm:grid-cols-2">{railNode}</div>
-              </div>
-            )}
-            {view === "studio" && (
-              <div className="mt-3 hidden lg:block xl:hidden">
-                <div className="grid gap-3 sm:grid-cols-2">{railNode}</div>
-              </div>
+              <Setup {...setupProps} />
             )}
           </div>
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-md lg:hidden">
-          <div className="grid grid-cols-4">
-            {mobileNav.map((item) => {
-              const active = item.id === "tracker" ? view === "tracker" : mobilePanel === item.id && view === "studio";
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    if (item.id === "tracker") {
-                      setView("tracker");
-                      return;
-                    }
-                    setView("studio");
-                    setMobilePanel(item.id as MobilePanel);
-                  }}
-                  className={cx("flex flex-col items-center gap-1 py-2.5", active ? "text-ink" : "text-faint")}
-                >
-                  <span className="relative">
-                    <item.icon size={17} strokeWidth={active ? 2.2 : 1.8} />
-                    {item.id === "studio" && pkg && (
-                      <span className="num absolute -right-3.5 -top-1.5 rounded-full bg-ink px-1 py-[1px] text-[8px] leading-tight text-white">{pkg.match.score}</span>
-                    )}
-                  </span>
-                  <span className="text-[10px] font-semibold">{item.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </nav>
+        <ResumeSheet
+          open={resumeOpen}
+          resume={resume}
+          busy={resumeBusy}
+          onClose={() => setResumeOpen(false)}
+          onSave={(next) => {
+            applyResume(next, { source: "manual", savedAt: new Date().toISOString() });
+            setResumeOpen(false);
+            notify(`이력서를 저장했습니다 — 경력 ${next.experiences.length}개 · 문장 ${resumeBulletCount(next)}개`);
+          }}
+          onFile={(file) => void importResumeFile(file)}
+          onSample={useSampleResume}
+          onNotify={notify}
+        />
 
         <AiSettingsModal
           open={aiOpen}
           status={aiStatus}
           config={aiConfig}
-          probing={probing}
+          probing={aiStatus.kind === "checking"}
           onClose={() => setAiOpen(false)}
           onSave={saveAi}
           onReprobe={() => void refreshAi()}
         />
 
-        <ImportDialog
-          open={Boolean(importState)}
-          fileName={importState?.fileName ?? ""}
-          text={importState?.text ?? ""}
-          preview={importState?.preview ?? null}
-          kind={importState?.kind ?? "job"}
-          onKind={changeImportKind}
-          onApply={applyImport}
-          onClose={() => setImportState(null)}
-        />
-
         {helpOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-ink/35 backdrop-blur-[2px]" onClick={() => setHelpOpen(false)} aria-hidden />
-            <div className="animate-rise relative z-10 w-full max-w-[500px] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+            <div className="animate-rise relative z-10 w-full max-w-[520px] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
               <div className="flex items-start justify-between px-5 pt-5">
                 <div>
                   <div className="eyebrow">Guide</div>
@@ -853,14 +650,14 @@ export default function App() {
                   <X size={16} />
                 </button>
               </div>
-              <ol className="mt-4 max-h-[52vh] space-y-2.5 overflow-y-auto px-5">
+              <ol className="mt-4 max-h-[54vh] space-y-2.5 overflow-y-auto px-5">
                 {[
-                  "‘내 이력서·공고 새로 입력하기’로 예시를 비우고, 내 공고와 이력서를 붙여넣습니다. .txt/.md 파일은 불러와서 문단으로 자동 분리합니다.",
-                  "‘지원 패키지 생성’을 누르면 적합도·갭, 리라이트, 1분 자기소개·역질문, 압박 질문이 한 번에 만들어집니다.",
-                  "1분 소개 탭에서 250~320자 자기소개와 마지막 역질문 3개를 복사합니다. 수치는 원문에 있는 값만 씁니다.",
-                  "면접 탭 → ‘모의면접 90초’에서 답변을 적고 제출하면 강점·보완점·꼬리질문이 나옵니다. 꼬리질문으로 이어서 연습하세요.",
-                  "지원 현황 탭에서 회사별 단계(준비중→서류→1차→2차→최종→오퍼)와 연봉·처우 협상 체크리스트를 관리합니다. 패키지를 만들면 자동 추가됩니다.",
-                  "AI가 연결되지 않아도 모든 기능이 규칙 엔진으로 동작합니다. 상단 배너에서 현재 모드를 확인하고 ‘AI로 다시 분석’을 누르세요.",
+                  "‘파일로 등록’으로 이력서(.txt/.md/.pdf)를 한 번 올립니다. 경력·문장이 원본으로 저장되고 다음부터는 자동으로 쓰입니다.",
+                  "공고는 URL을 붙여넣고 ‘공고 불러오기’를 누르면 서버가 회사·담당 업무·자격 요건·우대 사항을 직접 읽어 옵니다.",
+                  "로그인이 필요하거나 자동 수집을 막는 사이트는 안내와 함께 본문 붙여넣기 칸이 열립니다. 공고 본문을 붙여넣으면 같은 분석을 받습니다.",
+                  "이직 우선순위를 고르고 희망 연봉을 적으면 협상 문장과 처우 확인 질문이 그 기준으로 바뀝니다.",
+                  "결과는 위에서 아래로 읽으면 됩니다 — ① 적합도·갭 ② 1분 소개·경력 하이라이트 ③ 예상 질문 5개·모범 답변·90초 연습 ④ 역질문·연봉 협상.",
+                  "각 블록의 복사 버튼으로 자소서·이력서·메모에 바로 붙여넣고, 지원 현황에서 단계와 연봉을 이어서 관리하세요.",
                 ].map((text, index) => (
                   <li key={index} className="flex gap-2.5">
                     <span className="num mt-[1px] grid h-5 w-5 shrink-0 place-items-center rounded-md bg-paper-deep text-[9.5px] font-semibold text-muted">
@@ -871,8 +668,8 @@ export default function App() {
                 ))}
               </ol>
               <div className="mx-5 mt-4 rounded-lg border border-line bg-[#fcfcfa] p-3 text-[10.5px] leading-relaxed text-muted">
-                예시 인물·기업은 모두 가상입니다. 실제 회사 기밀, 타인의 개인정보, 채용 사이트의 비공개 자료는 넣지 마세요. 적합도 점수는 키워드
-                일치 기반의 참고값이며 서류 통과를 보장하지 않습니다.
+                예시 인물·기업은 모두 가상입니다. 실제 회사 기밀, 타인의 개인정보, 채용 사이트의 비공개 자료는 넣지 마세요. 적합도 점수는 참고값이며
+                서류 통과를 보장하지 않고, 연봉 참고 범위는 추정입니다.
               </div>
               <div className="px-5 py-4">
                 <button type="button" onClick={() => setHelpOpen(false)} className="btn btn-primary h-9 w-full text-[12px]">
@@ -884,7 +681,7 @@ export default function App() {
         )}
 
         {toast && (
-          <div className="pointer-events-none fixed inset-x-0 bottom-[74px] z-50 flex justify-center px-4 xl:bottom-6">
+          <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
             <div
               className={cx(
                 "animate-rise pointer-events-auto flex max-w-[92vw] items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[11.5px] font-medium shadow-[0_16px_40px_-20px_rgba(17,20,24,0.5)]",
@@ -892,6 +689,7 @@ export default function App() {
                 toast.tone === "warn" && "border-warn/25 bg-warn-soft text-warn",
                 toast.tone === "err" && "border-risk/25 bg-risk-soft text-risk",
               )}
+              data-testid="toast"
             >
               {toast.tone === "ok" && <Upload size={13} className="opacity-70" />}
               {toast.message}

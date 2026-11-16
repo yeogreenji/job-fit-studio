@@ -1,6 +1,7 @@
-import type { AiConfig, AiFit, InterviewQuestion, JobPackage, QuestionCategory, ReverseQuestion, ReverseTone } from "../types";
+import type { AiConfig, AiFit, InterviewQuestion, JobPackage, NegotiationPlan, OnePoint, QuestionCategory, ReverseQuestion, ReverseTone } from "../types";
 import { requestAiPackage } from "./ai";
 import { guardIntro, guardText, findSourceSentence } from "./guard";
+import { priorityOf } from "./priority";
 
 const CATEGORIES: QuestionCategory[] = ["전환", "성과 검증", "위기 대응", "직무", "협업", "리더십", "갭 보완", "컬처"];
 const TONES: ReverseTone[] = ["성과 기준", "갭 확인", "조직 적합"];
@@ -25,6 +26,8 @@ export const resumeSources = (pkg: JobPackage): string[] => {
 };
 
 const sentence = (value: unknown): string => (typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "");
+const strList = (value: unknown, limit: number): string[] =>
+  Array.isArray(value) ? value.map((item) => sentence(item)).filter(Boolean).slice(0, limit) : [];
 export interface EnrichResult {
   pkg: JobPackage;
   warnings: string[];
@@ -36,11 +39,15 @@ export interface EnrichResult {
  * 원문에 없는 수치·회사명이 섞인 항목은 버리고 경고로 남깁니다.
  */
 export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<EnrichResult> {
+  const option = priorityOf(pkg.priority);
+  const targetSalary = typeof pkg.targetSalary === "number" && pkg.targetSalary > 0 ? pkg.targetSalary : null;
   const { data, model } = await requestAiPackage({
     job: pkg.jobSnapshot,
     resume: pkg.resumeSnapshot,
     match: pkg.match,
     config,
+    priorityLabel: option?.label ?? "",
+    targetSalary,
   });
   const sources = resumeSources(pkg);
   const warnings: string[] = [];
@@ -62,6 +69,12 @@ export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<E
       next.aiFit = fit;
     } else if (verdict) {
       warnings.push("AI 진단 문장에 원문에 없는 값이 있어 제외했습니다.");
+    }
+    const pointTitle = sentence(data.fit.onePoint?.title);
+    const pointBody = sentence(data.fit.onePoint?.body);
+    if (pointTitle && pointBody && guardText(`${pointTitle} ${pointBody}`, sources).ok) {
+      const onePoint: OnePoint = { title: pointTitle.slice(0, 40), body: pointBody };
+      next.onePoint = onePoint;
     }
   }
 
@@ -123,16 +136,27 @@ export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<E
   });
   if (applied) next.rewrites = rewrites;
 
-  // 5) 압박 질문
+  // 5) 예상 질문 — 모범 답변·피해야 할 답변까지 함께 받습니다.
   const existing = new Set(pkg.questions.map((q) => q.question.replace(/\s+/g, "")));
   const additions: InterviewQuestion[] = (Array.isArray(data.questions) ? data.questions : [])
     .map((item) => {
       const question = sentence(item?.question);
       const category = CATEGORIES.includes(item?.category as QuestionCategory) ? (item.category as QuestionCategory) : "직무";
-      return { question, why: sentence(item?.why) || "이 공고에서 실제로 나올 수 있는 확인 질문입니다.", category };
+      return {
+        question,
+        why: sentence(item?.why) || "이 공고에서 실제로 나올 수 있는 확인 질문입니다.",
+        category,
+        answer: sentence(item?.answer),
+        avoid: sentence(item?.avoid),
+      };
     })
     .filter((item) => item.question.length > 10 && !existing.has(item.question.replace(/\s+/g, "")) && guardText(item.question, [...sources, "90초"]).ok)
-    .slice(0, 6)
+    .map((item) => {
+      const guardedAnswer = item.answer.length > 40 && guardText(item.answer, [...sources, "90초", "1분", "6개월"]).ok ? item.answer : "";
+      return { ...item, answer: guardedAnswer };
+    })
+    .filter((item) => item.answer)
+    .slice(0, 5)
     .map((item, index) => ({
       id: `q-ai-${index + 1}`,
       category: item.category,
@@ -147,11 +171,49 @@ export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<E
         action: "[행동: 내가 직접 한 일]",
         result: "[결과: 수치·변화]",
       },
-      hint: "AI가 공고를 보고 만든 질문입니다. 답은 경력 원본에 있는 사실로만 채우세요.",
+      hint: "AI가 공고를 보고 만든 질문과 답변 스크립트입니다. 원문에 있는 사실만으로 말하세요.",
+      answer: item.answer,
+      answerSource: "ai" as const,
+      avoid: item.avoid || undefined,
     }));
 
   if (additions.length) {
-    next.questions = [...pkg.questions, ...additions].slice(0, 16).map((q, index) => ({ ...q, id: `q-${index + 1}` }));
+    next.questions = [...additions, ...pkg.questions].slice(0, 16).map((q, index) => ({ ...q, id: `q-${index + 1}` }));
+  }
+
+  // 6) 처우 협상 스크립트
+  const negotiation = data.negotiation;
+  if (negotiation) {
+    const targetText = typeof targetSalary === "number" ? `${targetSalary.toLocaleString("ko-KR")}만원` : "";
+    const allowed = [...sources, targetText, "90일", "6개월", "1년", "3개월"].filter(Boolean);
+    const opener = sentence(negotiation.opener);
+    const counter = sentence(negotiation.counter);
+    const nonSalary = strList(negotiation.nonSalary, 6).filter((item) => guardText(item, allowed).ok);
+    const questions = strList(negotiation.questions, 4).filter((item) => item.length > 8 && guardText(item, allowed).ok);
+    if (opener && guardText(opener, allowed).ok) {
+      const base: NegotiationPlan = pkg.negotiation ?? {
+        target: targetText,
+        basis: targetText ? "내가 입력한 희망 연봉" : "희망 연봉 미입력",
+        opener,
+        counter: "",
+        nonSalary: [],
+        questions: [],
+        source: "ai",
+      };
+      next.negotiation = {
+        ...base,
+        target: targetText || base.target,
+        opener,
+        counter: counter && guardText(counter, allowed).ok ? counter : base.counter,
+        nonSalary: nonSalary.length ? nonSalary.slice(0, 5) : base.nonSalary,
+        questions: questions.length ? questions : base.questions,
+        source: "ai",
+      };
+    } else if (opener) {
+      warnings.push("AI 협상 문장에 원문에 없는 금액이 있어 제외했습니다.");
+    }
+  } else if (option && pkg.negotiation) {
+    next.negotiation = pkg.negotiation;
   }
 
   // 6) 역질문 3개

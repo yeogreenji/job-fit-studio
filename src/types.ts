@@ -172,10 +172,63 @@ export interface InterviewQuestion {
   edited: boolean;
   star: StarAnswer;
   hint: string;
+  /** 바로 읽고 말할 수 있는 모범 답변 스크립트 */
+  answer?: string;
+  answerSource?: EngineKind;
+  /** 면접에서 피해야 할 답변 */
+  avoid?: string;
 }
 
 /** 생성 주체. 규칙 엔진만으로 만든 결과와 AI가 만든 결과를 화면에서 구분합니다. */
 export type EngineKind = "rule" | "ai";
+
+/** 이직 우선순위 — 지원 패키지의 톤과 협상 스크립트를 바꿉니다. */
+export type PriorityId = "salary" | "balance" | "growth" | "stability";
+
+export interface PriorityOption {
+  id: PriorityId;
+  label: string;
+  short: string;
+  desc: string;
+  /** 협상·역질문에서 먼저 꺼낼 카드 */
+  focus: string[];
+}
+
+/** 공고를 어디서 가져왔는지. 결과 화면 상단에 출처를 남깁니다. */
+export interface JobSource {
+  kind: "url" | "paste" | "sample";
+  url?: string;
+  site?: string;
+  fetchedAt?: string;
+  note?: string;
+}
+
+/** 처우 협상 스크립트 묶음 */
+export interface NegotiationPlan {
+  /** 희망 연봉 표기 (예: 5,500만원). 값이 없으면 빈 문자열 */
+  target: string;
+  basis: string;
+  opener: string;
+  counter: string;
+  nonSalary: string[];
+  questions: string[];
+  source: EngineKind;
+}
+
+/** 이 공고에 넣을 때의 원포인트 전략 */
+export interface OnePoint {
+  title: string;
+  body: string;
+}
+
+/** 이력서만으로 만드는 추천 방향 */
+export interface ResumeRecommendation {
+  titles: { title: string; why: string }[];
+  salaryBand: { min: number; max: number; basis: string } | null;
+  targets: { group: string; why: string }[];
+  source: EngineKind;
+  model?: string;
+}
 
 export interface IntroOutline {
   hook: string;
@@ -250,6 +303,13 @@ export interface JobPackage {
   aiFit?: AiFit;
   aiModel?: string;
   aiWarnings?: string[];
+  /* ── URL·이력서 중심 재설계 ── */
+  source?: JobSource;
+  priority?: PriorityId;
+  onePoint?: OnePoint;
+  negotiation?: NegotiationPlan;
+  /** 만원 단위 희망 연봉. 협상 스크립트가 이 값을 씁니다. */
+  targetSalary?: number | null;
 }
 
 export interface AiConfig {
