@@ -203,4 +203,4 @@ export interface LlmConfig {
 }
 
 export type TabId = "match" | "rewrite" | "interview" | "export";
-export type ViewId = "studio" | "history";
+export type ViewId = "studio" | "history" | "tracker";

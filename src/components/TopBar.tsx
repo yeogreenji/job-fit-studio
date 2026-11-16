@@ -10,6 +10,7 @@ export function TopBar({
   onOpenApi,
   onOpenHistory,
   onOpenGuide,
+  onOpenTracker,
 }: {
   view: ViewId;
   company: string;
@@ -17,6 +18,7 @@ export function TopBar({
   apiEnabled: boolean;
   onOpenApi: () => void;
   onOpenHistory: () => void;
+  onOpenTracker: () => void;
   onOpenGuide: () => void;
 }) {
   return (
@@ -34,6 +36,7 @@ export function TopBar({
             <span className="sm:hidden">JobFit</span>
             <ChevronDown size={13} className="text-faint" />
           </button>
+          <button type="button" className="btn btn-outline shrink-0 text-xs" onClick={onOpenTracker} aria-current={view === "tracker" ? "page" : undefined}>공고 관리</button>
           <span className="hidden h-4 w-px bg-line-strong sm:block" />
           <span className="hidden min-w-0 items-center gap-1.5 sm:flex">
             <button

@@ -1,3 +1,4 @@
+import { JobTracker } from "./components/JobTracker";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Download,
@@ -344,13 +345,16 @@ export default function App() {
           role={pkg?.role ?? job.role}
           apiEnabled={apiConfig.enabled && Boolean(apiConfig.apiKey)}
           onOpenApi={() => setApiOpen(true)}
+          onOpenTracker={() => setView(view === "tracker" ? "studio" : "tracker")}
           onOpenHistory={() => setView(view === "history" ? "studio" : "history")}
           onOpenGuide={() => setHelpOpen(true)}
         />
 
         <main className="lg:pl-[68px]">
           <div className="mx-auto w-full max-w-[1640px] px-3 pb-24 pt-3 sm:px-5 sm:pt-4 xl:pb-6">
-            {view === "history" ? (
+            {view === "tracker" ? (
+              <JobTracker company={job.company} role={job.role} onBack={() => setView("studio")} />
+            ) : view === "history" ? (
               <HistoryView
                 packages={saved}
                 onLoad={loadPackage}

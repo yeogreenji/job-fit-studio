@@ -53,9 +53,9 @@ const jobSections = (job: JobPosting): { id: SectionId; text: string }[] => [
 ];
 
 export function gradeFor(score: number): Grade {
-  if (score >= 86) return { label: "매우 적합", tone: "high", desc: "서류 통과 가능성이 높습니다. 리라이트로 표현만 다듬으면 됩니다." };
-  if (score >= 74) return { label: "적합", tone: "high", desc: "핵심 요구를 대부분 충족합니다. 갭 1~2개를 면접에서 보완하세요." };
-  if (score >= 60) return { label: "보완 필요", tone: "mid", desc: "절반 이상 맞지만, 빠진 키워드가 서류에서 먼저 걸립니다." };
+  if (score >= 86) return { label: "매우 적합", tone: "high", desc: "입력한 경력에서 공고와 일치하는 표현이 많이 확인됩니다. 필수 요건은 원문과 대조하세요." };
+  if (score >= 74) return { label: "적합", tone: "high", desc: "공고와 일치하는 경력 표현과 추가로 확인할 요구를 함께 검토하세요." };
+  if (score >= 60) return { label: "보완 필요", tone: "mid", desc: "경력 원본에 근거를 추가할 수 있는 항목을 먼저 확인하세요." };
   if (score >= 45) return { label: "갭 큼", tone: "low", desc: "직무 전환이나 산업 경험이 약합니다. 지원 동기와 보완 계획이 필요합니다." };
   return { label: "재검토", tone: "bad", desc: "공고와 경력의 접점이 적습니다. 다른 공고를 함께 보는 편이 좋습니다." };
 }
@@ -251,17 +251,12 @@ export function matchResume(resume: MasterResume, job: JobPosting): MatchResult 
   };
 }
 
-const WEAK_VERB = /(담당|참여)(했|하였|해)?(습니다)?\.?$/;
-
 const stripDot = (value: string) => value.replace(/[.。]$/, "").trim();
 
 function rewriteText(text: string): string {
   let next = text.replace(/\s+/g, " ").trim();
   next = next.replace(/^(다양한|각종|주로)\s+/, "");
-  next = next.replace(WEAK_VERB, (_, verb: string, mid: string, formal: string) => {
-    const mapped = verb === "담당" ? "운영" : "수행";
-    return `${mapped}${mid ?? ""}${formal ?? ""}`;
-  });
+
 
   // 결과 수치가 뒤에 있으면 앞으로 당깁니다. 마지막 연결 어미부터 거꾸로 시도합니다.
   const links = [...next.matchAll(/(?:하여|해서|해)\s+/g)];
