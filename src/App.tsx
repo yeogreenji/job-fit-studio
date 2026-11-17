@@ -51,6 +51,8 @@ import { Setup, type JobFetchError } from "./components/Setup";
 import { ResumeSheet } from "./components/ResumeSheet";
 import { ResultFlow } from "./components/ResultFlow";
 import { TrackerView } from "./components/TrackerView";
+import { BoardView } from "./components/BoardView";
+import { loadBoard, persistBoard, rescoreAll, type BoardPosting } from "./lib/board";
 import { HistoryView } from "./components/HistoryView";
 import { AiSettingsModal } from "./components/AiSettingsModal";
 import { PrintSheet } from "./components/PrintSheet";
@@ -68,7 +70,8 @@ const INITIAL_STATUS: AiStatus = {
 const DESCRIPTION_LIMIT = 6_000;
 
 export default function App() {
-  const [view, setView] = useState<ViewId>("studio");
+  const [view, setView] = useState<ViewId>("board");
+  const [board, setBoard] = useState<BoardPosting[]>(() => loadBoard());
   const [resume, setResume] = useState<MasterResume>(() => loadResume());
   const [resumeMeta, setResumeMeta] = useState<ResumeMeta | null>(() => loadResumeMeta());
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -145,6 +148,15 @@ export default function App() {
   useEffect(() => {
     void refreshAi();
   }, [refreshAi]);
+
+  /* ── 공고 보드 저장 · 이력서가 바뀌면 점수 재계산 ── */
+  useEffect(() => {
+    persistBoard(board);
+  }, [board]);
+
+  useEffect(() => {
+    if (resumeReady(resume)) setBoard((prev) => (prev.length ? rescoreAll(resume, prev) : prev));
+  }, [resume]);
 
   /* ── 이력서 기반 추천 (규칙) ── */
   useEffect(() => {
@@ -576,7 +588,29 @@ export default function App() {
 
         <main>
           <div className="mx-auto w-full max-w-[1180px] px-3 pb-16 pt-3 sm:px-5 sm:pt-4">
-            {view === "history" ? (
+            {view === "board" ? (
+              <BoardView
+                resume={resume}
+                resumeOk={resumeReady(resume)}
+                config={aiConfig}
+                postings={board}
+                setPostings={setBoard}
+                keywords={recommendation?.titles.map((t) => t.title) ?? []}
+                onOpenResume={() => setResumeOpen(true)}
+                onCoach={(p) => {
+                  setPkg(null);
+                  setJob(p.job);
+                  setJobSource(p.source);
+                  setJobError(null);
+                  setView("studio");
+                }}
+                onApplied={(p) => {
+                  setTracker((prev) => [makeEntry({ company: p.job.company || "회사 미확인", role: p.job.role || "직무 미확인", stage: "서류", score: p.score, deadline: p.job.deadline }), ...prev]);
+                  notify(`${p.job.company || "공고"} 지원 건을 지원 현황에 기록했습니다.`);
+                }}
+                notify={notify}
+              />
+            ) : view === "history" ? (
               <HistoryView packages={saved} onLoad={loadPackage} onDelete={deletePackage} onClear={() => setSaved(clearPackages())} onBack={() => setView("studio")} />
             ) : view === "tracker" ? (
               <TrackerView

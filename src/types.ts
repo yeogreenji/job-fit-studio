@@ -356,4 +356,4 @@ export interface ApplicationEntry {
 }
 
 export type TabId = "match" | "rewrite" | "interview" | "pitch" | "export";
-export type ViewId = "studio" | "history" | "tracker";
+export type ViewId = "board" | "studio" | "history" | "tracker";

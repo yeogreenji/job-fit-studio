@@ -9,12 +9,14 @@ JobFit Studio E2E 검증 — URL·이력서 중심 재설계.
 """
 
 import os, json, subprocess, sys, time, socket, atexit, urllib.request, urllib.error
-os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
-os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + ((":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else "")
+if os.path.isdir("/workspace/.cache/ms-playwright"):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
+if os.path.isdir("/workspace/.libs/usr/lib/x86_64-linux-gnu"):
+    os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + ((":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else "")
 from playwright.sync_api import sync_playwright
 
-ROOT = "/workspace/projects/job-fit-studio"
-NODE = "/workspace/.tools/node-v22.12.0-linux-x64/bin/node"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NODE = os.environ.get("NODE_BIN", "node")
 FIXTURES = os.path.join(ROOT, "scripts/fixtures")
 
 checks = []
@@ -235,6 +237,8 @@ with sync_playwright() as p:
     attach(page, "ai")
     page.goto(AI, wait_until="domcontentloaded")
     page.wait_for_timeout(900)
+    page.click("[data-testid=nav-studio]")
+    page.wait_for_timeout(200)
 
     def first_screen():
         check("banner live", wait_attr(page, "[data-testid=mode-banner]", "data-mode", "live"))
@@ -261,6 +265,8 @@ with sync_playwright() as p:
         check("resume persisted", isinstance(saved.get("experiences"), list) and len(saved["experiences"]) == 2, str(len(saved.get("experiences") or [])))
         page.reload(wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
+        page.click("[data-testid=nav-studio]")
+        page.wait_for_timeout(300)
         check("resume reused after reload", page.locator("[data-testid=resume-status]").count() == 1 and page.inner_text("[data-testid=resume-name]") == "김하람")
 
     step("resume upload", resume_upload)
@@ -486,6 +492,8 @@ with sync_playwright() as p:
         attach(pp, "pdf")
         pp.goto(AI, wait_until="domcontentloaded")
         pp.wait_for_timeout(900)
+        pp.click("[data-testid=nav-studio]")
+        pp.wait_for_timeout(200)
         pp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.pdf"))
         pp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
         pp.wait_for_timeout(500)
@@ -507,6 +515,8 @@ with sync_playwright() as p:
         attach(p3, "nokey")
         p3.goto(NOKEY, wait_until="domcontentloaded")
         p3.wait_for_timeout(1200)
+        p3.click("[data-testid=nav-studio]")
+        p3.wait_for_timeout(200)
         check("nokey banner local", wait_attr(p3, "[data-testid=mode-banner]", "data-mode", "local"))
         check("nokey note", p3.get_by_text("규칙 엔진").count() > 0)
         p3.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
@@ -561,6 +571,8 @@ with sync_playwright() as p:
         attach(p4, "offline")
         p4.goto(OFFLINE, wait_until="domcontentloaded")
         p4.wait_for_timeout(1200)
+        p4.click("[data-testid=nav-studio]")
+        p4.wait_for_timeout(200)
         check("offline banner local", wait_attr(p4, "[data-testid=mode-banner]", "data-mode", "local"))
         p4.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
         p4.wait_for_timeout(900)
@@ -589,6 +601,8 @@ with sync_playwright() as p:
         attach(p6, "gemini")
         p6.goto(GEMINI, wait_until="domcontentloaded")
         p6.wait_for_timeout(1200)
+        p6.click("[data-testid=nav-studio]")
+        p6.wait_for_timeout(200)
         check("gemini banner live", wait_attr(p6, "[data-testid=mode-banner]", "data-mode", "live"))
         check("gemini banner model", "gemini-3.5-flash-lite" in p6.inner_text("[data-testid=mode-banner]"))
         p6.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
@@ -612,6 +626,8 @@ with sync_playwright() as p:
         attach(mp, "mobile")
         mp.goto(AI, wait_until="domcontentloaded")
         mp.wait_for_timeout(1200)
+        mp.click("[data-testid=nav-studio]")
+        mp.wait_for_timeout(200)
         check("mobile no overflow (setup)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
         check("mobile resume CTA visible", mp.locator("[data-testid=resume-file-btn]").count() == 1)
         check("mobile url input", mp.locator("[data-testid=job-url]").count() == 1)
@@ -640,6 +656,100 @@ with sync_playwright() as p:
         mctx.close()
 
     step("mobile 390px", mobile)
+
+    # ────────────────────────── 공고 보드 ──────────────────────────
+    def board_flow():
+        bctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        bp = bctx.new_page()
+        attach(bp, "board")
+        bp.goto(AI, wait_until="domcontentloaded")
+        bp.wait_for_timeout(900)
+        check("board is default view", bp.locator("[data-testid=board-view]").count() == 1)
+        check("board empty message", bp.locator("[data-testid=board-empty]").count() == 1)
+        # 이력서 없이 수집하면 막힙니다
+        bp.fill("[data-testid=board-urls]", "https://www.wanted.co.kr/wd/100001")
+        bp.click("[data-testid=board-collect]")
+        bp.wait_for_timeout(500)
+        check("board needs resume first", bp.locator("[data-testid=board-item]").count() == 0)
+        bp.locator("button[aria-label=닫기]").first.click()
+        bp.wait_for_timeout(200)
+        bp.click("[data-testid=nav-studio]")
+        bp.wait_for_timeout(200)
+        bp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
+        bp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
+        bp.click("[data-testid=nav-board]")
+        bp.wait_for_timeout(300)
+        bp.fill("[data-testid=board-urls]", "https://www.wanted.co.kr/wd/100001\nhttps://www.wanted.co.kr/wd/100002?utm_source=x\nhttps://www.wanted.co.kr/wd/100001?utm_source=y\nhttps://blocked-careers.example/jobs/1")
+        bp.click("[data-testid=board-collect]")
+        bp.wait_for_selector("[data-testid=board-item]", timeout=40000)
+        bp.wait_for_timeout(1500)
+        check("board added 2 (tracking-param dup removed)", bp.locator("[data-testid=board-item]").count() == 2, str(bp.locator("[data-testid=board-item]").count()))
+        check("board shows failure with paste fallback", bp.locator("[data-testid=board-failures]").count() == 1 and "자동 수집을 막았습니다" in bp.inner_text("[data-testid=board-failures]"))
+        scores = [int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts()]
+        check("board scores computed 0-100", len(scores) == 2 and all(0 <= v <= 100 for v in scores), str(scores))
+        with open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8") as handle:
+            job_text = handle.read()
+        bp.locator("[data-testid=board-failures] textarea").first.fill(job_text)
+        bp.get_by_role("button", name="본문으로 추가").click()
+        bp.wait_for_timeout(400)
+        check("board paste rescue adds posting", bp.locator("[data-testid=board-item]").count() == 3)
+        bp.click("[data-testid=collect-tab-text]")
+        bp.fill("[data-testid=board-bulk]", job_text + "\n===\n" + job_text.replace("노바커머스", "다온스토어"))
+        bp.click("[data-testid=board-bulk-add]")
+        bp.wait_for_timeout(400)
+        check("board bulk text adds 2", bp.locator("[data-testid=board-item]").count() == 5, str(bp.locator("[data-testid=board-item]").count()))
+        bp.click("[data-testid=collect-tab-search]")
+        check("board search tab has collector bookmarklet", bp.locator("[data-testid=bookmarklet]").get_attribute("href").startswith("javascript:"))
+        # 필터·정렬
+        top = int(bp.locator("[data-testid=item-score]").first.inner_text())
+        check("board sorted by fit desc", top == max(int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts()))
+        all_scores = sorted(int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts())
+        threshold = min(100, ((all_scores[-1] // 5) * 5) + (5 if all_scores[-1] % 5 else 0)) if all_scores[0] == all_scores[-1] else min(100, (all_scores[0] // 5 + 1) * 5)
+        bp.locator("[data-testid=min-score]").evaluate("(el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }", threshold)
+        bp.wait_for_timeout(200)
+        check("board min-score filter hides low fits", bp.locator("[data-testid=board-item]").count() < 5, str(all_scores))
+        bp.locator("[data-testid=min-score]").evaluate("(el) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 0); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }")
+        # 지원 큐
+        bp.click("[data-testid=queue-top]")
+        bp.wait_for_selector("[data-testid=apply-queue]")
+        check("queue shows tailored summary", len(bp.inner_text("[data-testid=queue-summary]")) > 40)
+        has_link = bp.locator("[data-testid=queue-open]").count() == 1
+        if has_link:
+            check("queue done locked until apply page opened", bp.locator("[data-testid=queue-done]").is_disabled())
+            with bp.context.expect_page() as popup:
+                bp.click("[data-testid=queue-open]")
+            popup.value.close()
+            bp.wait_for_timeout(200)
+        before = len(tracker(bp))
+        bp.click("[data-testid=queue-done]")
+        bp.wait_for_timeout(300)
+        check("queue done records tracker entry", len(tracker(bp)) == before + 1, str(len(tracker(bp))))
+        bp.click("[data-testid=queue-skip]")
+        bp.wait_for_timeout(200)
+        statuses = bp.evaluate("JSON.parse(localStorage.getItem('jobfit.board.v1')||'[]').map(p=>p.status)")
+        check("queue updates statuses", "applied" in statuses and "skip" in statuses, str(statuses))
+        bp.keyboard.press("Escape")
+        if bp.locator("[data-testid=apply-queue]").count():
+            bp.locator("[data-testid=apply-queue] button[aria-label=닫기]").click()
+        bp.click("[data-testid=filter-applied]")
+        check("status filter applied", bp.locator("[data-testid=board-item]").count() == 1)
+        bp.click("[data-testid=filter-all]")
+        # 저장
+        bp.reload(wait_until="domcontentloaded")
+        bp.wait_for_timeout(900)
+        check("board persisted after reload", bp.locator("[data-testid=board-item]").count() == 5)
+        # 상세 코칭 연결
+        bp.locator("[data-testid=item-coach]").first.click()
+        bp.wait_for_timeout(500)
+        check("coach opens studio with job loaded", bp.locator("[data-testid=job-preview]").count() == 1)
+        bp.click("[data-testid=nav-board]")
+        # 모바일
+        bp.set_viewport_size({"width": 390, "height": 844})
+        bp.wait_for_timeout(300)
+        check("board mobile no overflow", no_overflow(bp), str(bp.evaluate("document.documentElement.scrollWidth")))
+        bctx.close()
+
+    step("job board", board_flow)
 
     browser.close()
 
