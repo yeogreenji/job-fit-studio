@@ -1,4 +1,4 @@
-"""README용 화면 캡처 (새 URL·이력서 중심 흐름)."""
+"""README용 화면 캡처 (공고 수집·직접 지원 허브)."""
 
 import os, socket, subprocess, time, atexit
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
@@ -30,7 +30,7 @@ def attach(page):
     page.on("pageerror", lambda e: errors.append(f"[pageerror] {e}"))
 
 
-def calm(page, ms=700):
+def calm(page, ms=900):
     page.mouse.move(900, 8)
     page.wait_for_timeout(ms)
 
@@ -47,53 +47,37 @@ with sync_playwright() as p:
 
     page.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
     page.wait_for_selector("[data-testid=resume-status]", timeout=15000)
-    page.wait_for_timeout(900)
+    page.fill(
+        "[data-testid=hub-urls]",
+        "https://www.jobkorea.co.kr/Recruit/GI_Read/987654\nhttps://www.wanted.co.kr/wd/123456",
+    )
+    page.click("[data-testid=hub-fetch]")
+    page.wait_for_selector("[data-testid=hub-detail]", timeout=45000)
+    page.wait_for_timeout(4000)
     calm(page)
-    page.screenshot(path=f"{OUT}/02-desktop-resume.png")
+    page.screenshot(path=f"{OUT}/02-desktop-jobs.png")
+    page.screenshot(path=f"{OUT}/02-desktop-jobs-full.png", full_page=True)
 
-    page.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-    page.click("[data-testid=job-fetch]")
-    page.wait_for_selector("[data-testid=job-preview]", timeout=25000)
-    page.fill("[data-testid=target-salary]", "5500")
-    page.click("[data-testid=priority-balance]")
-    page.wait_for_timeout(900)
+    page.locator("[data-testid=hub-requirements]").scroll_into_view_if_needed()
     calm(page)
-    page.screenshot(path=f"{OUT}/03-desktop-job.png")
+    page.screenshot(path=f"{OUT}/03-desktop-requirements.png")
 
-    page.click("[data-testid=generate]")
-    page.wait_for_selector("[data-testid=result]", timeout=45000)
+    page.locator("[data-testid=hub-apply-kit]").scroll_into_view_if_needed()
+    calm(page)
+    page.screenshot(path=f"{OUT}/04-desktop-apply-kit.png")
+
+    page.click("[data-testid=deep-open]")
+    page.wait_for_selector("[data-testid=result]", timeout=60000)
     page.wait_for_timeout(3000)
     calm(page)
-    page.screenshot(path=f"{OUT}/04-desktop-fit.png")
+    page.screenshot(path=f"{OUT}/05-desktop-deep.png")
+    page.click("[data-testid=new-job]")
+    page.wait_for_timeout(800)
 
-    page.locator("[data-testid=section-pitch]").scroll_into_view_if_needed()
+    page.click("[data-testid=nav-tracker]")
+    page.wait_for_timeout(1200)
     calm(page)
-    page.screenshot(path=f"{OUT}/05-desktop-pitch.png")
-
-    page.locator("[data-testid=section-interview]").scroll_into_view_if_needed()
-    calm(page)
-    page.screenshot(path=f"{OUT}/06-desktop-interview.png")
-
-    page.locator("[data-testid=section-offer]").scroll_into_view_if_needed()
-    calm(page)
-    page.screenshot(path=f"{OUT}/07-desktop-offer.png")
-
-    page.click("[data-testid=open-tracker]")
-    page.wait_for_timeout(1000)
-    calm(page)
-    page.screenshot(path=f"{OUT}/08-desktop-tracker.png")
-
-    page.click("[data-testid=nav-history]")
-    page.wait_for_timeout(900)
-    calm(page)
-    page.screenshot(path=f"{OUT}/09-desktop-history.png")
-
-    page.click("[data-testid=open-ai]")
-    page.wait_for_timeout(700)
-    calm(page)
-    page.screenshot(path=f"{OUT}/10-desktop-ai.png")
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(400)
+    page.screenshot(path=f"{OUT}/06-desktop-tracker.png")
 
     mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
     mp = mctx.new_page()
@@ -101,26 +85,22 @@ with sync_playwright() as p:
     mp.goto(BASE, wait_until="domcontentloaded")
     mp.wait_for_timeout(1400)
     calm(mp)
-    mp.screenshot(path=f"{OUT}/11-mobile-start.png")
+    mp.screenshot(path=f"{OUT}/07-mobile-start.png")
     mp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
     mp.wait_for_selector("[data-testid=resume-status]", timeout=15000)
-    mp.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-    mp.click("[data-testid=job-fetch]")
-    mp.wait_for_selector("[data-testid=job-preview]", timeout=25000)
+    mp.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654")
+    mp.click("[data-testid=hub-fetch]")
+    mp.wait_for_selector("[data-testid=hub-detail]", timeout=30000)
+    mp.wait_for_timeout(3500)
     calm(mp)
-    mp.screenshot(path=f"{OUT}/12-mobile-job.png", full_page=True)
-    mp.click("[data-testid=generate]")
-    mp.wait_for_selector("[data-testid=result]", timeout=45000)
-    mp.wait_for_timeout(2500)
+    mp.screenshot(path=f"{OUT}/08-mobile-hub.png", full_page=True)
+    mp.locator("[data-testid=hub-apply-kit]").scroll_into_view_if_needed()
     calm(mp)
-    mp.screenshot(path=f"{OUT}/13-mobile-fit.png")
-    mp.locator("[data-testid=section-interview]").scroll_into_view_if_needed()
-    calm(mp)
-    mp.screenshot(path=f"{OUT}/14-mobile-interview.png")
+    mp.screenshot(path=f"{OUT}/09-mobile-apply-kit.png")
     mp.click("[data-testid=nav-tracker]")
     mp.wait_for_timeout(1000)
     calm(mp)
-    mp.screenshot(path=f"{OUT}/15-mobile-tracker.png")
+    mp.screenshot(path=f"{OUT}/10-mobile-tracker.png")
     mctx.close()
 
     browser.close()

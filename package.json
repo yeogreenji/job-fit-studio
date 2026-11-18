@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "JobFit Studio — 채용 공고 한 편과 내 이력서로 적합도·갭 분석, 공고 맞춤 리라이트, 1분 자기소개·역질문, 90초 모의면접 피드백, 지원 현황·처우 협상까지 만드는 실전형 AI 커리어 코치",
+  "description": "JobFit Studio — 여러 채용 공고를 한 번에 모아 지원 요건·제출서류·원문 지원 링크를 정리하고, 내 이력서로 지원 문구·자소서 초안을 만들어 직접 지원까지 이어 주는 지원 허브",
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",

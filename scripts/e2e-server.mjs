@@ -14,6 +14,7 @@ import { build } from "esbuild";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const jobPage = await readFile(path.join(here, "fixtures/job-page.html"), "utf-8");
+const jobPage2 = await readFile(path.join(here, "fixtures/job-page-2.html"), "utf-8");
 const dist = path.join(root, "dist");
 const mode = process.argv[2] ?? "ai";
 const port = Number(process.argv[3] ?? 4183);
@@ -31,7 +32,22 @@ const MIME = {
 };
 
 /** 공고 URL 정리 스텁: 페이지에 실제로 있는 값만 돌려줍니다. */
-function jobExtractPayload() {
+function jobExtractPayload(user = "") {
+  if (user.includes("루멘스튜디오")) {
+    return {
+      company: "루멘스튜디오",
+      role: "PR 매니저",
+      employmentType: "정규직",
+      location: "부산 해운대구",
+      deadline: "2026-11-30",
+      responsibilities: "브랜드·작품 보도자료 작성과 언론 대응\n위기 이슈 대응 메시지와 공식 입장문 작성\n파트너사·기관 대상 커뮤니케이션 기획",
+      requirements: "PR 또는 커뮤니케이션 경력 5년 이상\n보도자료 작성과 미디어 대응 실무 경험\n위기 커뮤니케이션을 직접 맡아 본 경험",
+      preferred: "엔터테인먼트 산업 경험\n영문 보도자료 작성 가능자",
+      documents: "이력서 1부\n경력기술서 1부\n자기소개서 1부\n포트폴리오(보도자료·기사 링크) 1부",
+      tone: "작품과 사람을 먼저 보는 팀\n이슈가 생기면 사실 확인을 먼저 하는 문화",
+      note: "",
+    };
+  }
   return {
     company: "노바커머스",
     role: "브랜드 커뮤니케이션 매니저",
@@ -204,6 +220,25 @@ function evalPayload(user) {
   };
 }
 
+/** 지원 문구 스텁: 원문에 있는 경력 문장만 쓰고, 일부러 창작 수치를 섞어 가드 동작을 검증합니다. */
+function applyPayload(user) {
+  const resumeBlock = user.split("[지원자 경력 문장")[1]?.split("[지원 공고]")[0] ?? "";
+  const bullets = [...resumeBlock.matchAll(/^- (.+)$/gm)].map((match) => match[1].trim());
+  const company = (user.match(/^회사: (.+)$/m) ?? [])[1] ?? "";
+  const role = (user.match(/^직무: (.+)$/m) ?? [])[1] ?? "";
+  const first = bullets[0] ?? "경력 문장을 바탕으로 준비했습니다.";
+  const second = bullets[1] ?? first;
+  return {
+    oneLiner: `${company} ${role} 지원자입니다. 매출 777억을 만든 경험이 있습니다.`,
+    coverLetter: [
+      `${company}의 ${role} 공고에서 보도자료와 위기 대응을 함께 맡는 업무를 확인했습니다. 저는 그 두 가지를 실제로 해 온 사람입니다.`,
+      `${first} ${second}`,
+      `입사하면 ${role}의 보도자료 기준과 위기 대응 순서를 먼저 문서로 정리하고, 유관부서와 사실 확인을 거쳐 메시지를 내겠습니다.`,
+    ].join("\n\n"),
+    keyPoints: [first, second, "없는 회사에서 매출 999억을 달성했습니다."],
+  };
+}
+
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json" } });
 }
@@ -235,9 +270,10 @@ async function geminiResponse(url, init = {}) {
 }
 
 function payloadFor(system, user) {
-  if (system.includes("JOBFIT_JOBURL")) return jobExtractPayload();
+  if (system.includes("JOBFIT_JOBURL")) return jobExtractPayload(user);
   if (system.includes("JOBFIT_RECOMMEND")) return recommendPayload();
   if (system.includes("JOBFIT_EVAL")) return evalPayload(user);
+  if (system.includes("JOBFIT_APPLY")) return applyPayload(user);
   return packagePayload(user);
 }
 
@@ -261,6 +297,9 @@ async function boot() {
       // 공고 URL 수집 테스트용 가짜 사이트
       if (target.includes("wanted.co.kr")) {
         return new Response(jobPage, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+      }
+      if (target.includes("jobkorea.co.kr")) {
+        return new Response(jobPage2, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
       }
       if (target.includes("blocked-careers.example")) {
         return new Response("Forbidden", { status: 403, headers: { "content-type": "text/html; charset=utf-8" } });

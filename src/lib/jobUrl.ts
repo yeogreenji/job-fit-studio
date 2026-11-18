@@ -113,6 +113,9 @@ export async function fetchJobFromUrl(url: string, config: AiConfig, timeoutMs =
       responsibilities: asString(job.responsibilities),
       requirements: asString(job.requirements),
       preferred: asString(job.preferred),
+      documents: asString(job.documents),
+      applyUrl: asString(job.applyUrl) || asString(meta.finalUrl) || asString(meta.url) || url,
+      applyLabel: asString(job.applyLabel) || "원문 공고",
       tone: asString(job.tone),
     },
     meta: {

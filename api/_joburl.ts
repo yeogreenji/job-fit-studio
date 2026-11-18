@@ -45,7 +45,13 @@ export interface ExtractedJob {
   responsibilities: string;
   requirements: string;
   preferred: string;
+  /** 제출서류·필수 제출 항목 */
+  documents: string;
   tone: string;
+  /** 원문 공고의 직접 지원 링크 */
+  applyUrl: string;
+  /** 원문 지원 버튼 문구 */
+  applyLabel: string;
 }
 
 const SITES: { test: RegExp; label: string }[] = [
@@ -304,7 +310,9 @@ export async function fetchJobPage(rawUrl: string): Promise<FetchedPage> {
 
 /* ───────────────────────────── 문단 나누기 ───────────────────────────── */
 
-const HEADINGS: { id: "responsibilities" | "requirements" | "preferred" | "tone"; pattern: RegExp }[] = [
+type SectionKey = "responsibilities" | "requirements" | "preferred" | "documents" | "tone";
+
+const HEADINGS: { id: SectionKey; pattern: RegExp }[] = [
   {
     id: "responsibilities",
     pattern: /^(?:주요\s*업무|담당\s*업무|업무\s*내용|하는\s*일|업무\s*소개|역할|미션|Responsibilities|What you(?:'|’)ll do|What you will do|The role|About the role|직무\s*내용)$/i,
@@ -318,14 +326,20 @@ const HEADINGS: { id: "responsibilities" | "requirements" | "preferred" | "tone"
     pattern: /^(?:우대\s*사항|우대|우대요건|있으면\s*좋은|Preferred|Nice to have|Preferred qualifications|Bonus points|Pluses)$/i,
   },
   {
+    id: "documents",
+    pattern: /^(?:제출\s*서류|제출\s*자료|필수\s*제출|제출\s*항목|지원\s*서류|Required documents|Documents required|How to apply|To apply|Application)$/i,
+  },
+  {
     id: "tone",
     pattern: /^(?:조직\s*문화|기업\s*문화|우리\s*팀|팀\s*소개|복지|혜택|근무\s*조건|근무\s*환경|About us|About the team|Benefits|Perks|Why join us|Culture)$/i,
   },
 ];
 
-const isHeading = (line: string): { id: "responsibilities" | "requirements" | "preferred" | "tone" } | null => {
+const isHeading = (line: string): { id: SectionKey } | null => {
   const compact = line
     .replace(/^[\s•·\-–—*>#]+/, "")
+    .replace(/^[\[【(]+/, "")
+    .replace(/[\]】)]+$/, "")
     .replace(/[:：]\s*$/, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -343,10 +357,10 @@ const cleanBlock = (lines: string[]): string =>
     .slice(0, 14)
     .join("\n");
 
-export function splitSections(text: string): Pick<ExtractedJob, "responsibilities" | "requirements" | "preferred" | "tone"> {
+export function splitSections(text: string): Pick<ExtractedJob, "responsibilities" | "requirements" | "preferred" | "documents" | "tone"> {
   const lines = text.split("\n").map((line) => line.trim());
-  const buckets: Record<string, string[]> = { responsibilities: [], requirements: [], preferred: [], tone: [] };
-  let current: "responsibilities" | "requirements" | "preferred" | "tone" | null = null;
+  const buckets: Record<string, string[]> = { responsibilities: [], requirements: [], preferred: [], documents: [], tone: [] };
+  let current: SectionKey | null = null;
   for (const line of lines) {
     const heading = isHeading(line);
     if (heading) {
@@ -365,6 +379,7 @@ export function splitSections(text: string): Pick<ExtractedJob, "responsibilitie
     responsibilities: cleanBlock(buckets.responsibilities),
     requirements: cleanBlock(buckets.requirements),
     preferred: cleanBlock(buckets.preferred),
+    documents: cleanBlock(buckets.documents),
     tone: cleanBlock(buckets.tone),
   };
   if (!result.responsibilities && !result.requirements) {
@@ -399,6 +414,72 @@ const titleParts = (title: string): string[] =>
     .split(/\s*[|·]\s*|\s+[-–—]\s+|\s*\|\s*/)
     .map((part) => part.replace(/\s+/g, " ").trim())
     .filter((part) => part.length > 1 && part.length < 60);
+
+const APPLY_LABEL =
+  /(지원\s*하기|지원하기|입사\s*지원|입사지원|지원\s*접수|지원서\s*작성|온라인\s*지원|apply(?:\s*now)?|submit\s*(?:application|resume)|join\s*us)/i;
+const APPLY_HREF = /(apply|application|applyform|입사지원)/i;
+const SKIP_HREF = /(login|signin|sign-in|logout|privacy|terms|policy|faq|help|customer|javascript:|mailto:|tel:)/i;
+
+/**
+ * 원문 공고의 ‘지원하기’ 링크를 찾습니다.
+ * 페이지 안의 앵커 문구·경로에서 지원 버튼을 고르고, 없으면 공고 URL 자체를 씁니다.
+ * (AI가 만든 값이 아니라 페이지 HTML에서 직접 읽은 값입니다)
+ */
+export function extractApplyLink(
+  html: string,
+  baseUrl: string,
+  ld: Record<string, unknown> | null,
+): { applyUrl: string; applyLabel: string } {
+  const baseOrigin = (() => {
+    try {
+      return new URL(baseUrl).origin;
+    } catch {
+      return "";
+    }
+  })();
+  const candidates: { href: string; label: string; score: number }[] = [];
+  const anchorPattern = /<a\b([^>]*)>([\s\S]{0,200}?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = anchorPattern.exec(html))) {
+    const attrs = match[1] ?? "";
+    const hrefMatch = attrs.match(/href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const raw = decodeEntities(hrefMatch?.[1] ?? hrefMatch?.[2] ?? hrefMatch?.[3] ?? "").trim();
+    if (!raw || raw.startsWith("#") || SKIP_HREF.test(raw)) continue;
+    let resolved: URL;
+    try {
+      resolved = new URL(raw, baseUrl);
+    } catch {
+      continue;
+    }
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") continue;
+    const label = htmlToText(match[2] ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 30);
+    const labelHit = APPLY_LABEL.test(label);
+    const hrefHit = APPLY_HREF.test(`${resolved.pathname}${resolved.search}`);
+    if (!labelHit && !hrefHit) continue;
+    let score = (labelHit ? 6 : 0) + (hrefHit ? 2 : 0) + (resolved.origin === baseOrigin ? 1 : 0);
+    if (/(login|signin|privacy|terms|faq)/i.test(resolved.pathname)) score -= 5;
+    candidates.push({ href: resolved.toString(), label, score });
+  }
+  candidates.sort((a, b) => b.score - a.score);
+  const best = candidates[0];
+  if (best) return { applyUrl: best.href, applyLabel: best.label };
+
+  const ldUrl = ld ? firstString((ld as Record<string, unknown>).url) : "";
+  if (ldUrl) {
+    try {
+      const resolved = new URL(ldUrl, baseUrl);
+      if (resolved.protocol === "http:" || resolved.protocol === "https:") {
+        return { applyUrl: resolved.toString(), applyLabel: "원문 공고" };
+      }
+    } catch {
+      /* 공고 URL 사용 */
+    }
+  }
+  return { applyUrl: baseUrl, applyLabel: "원문 공고" };
+}
 
 export function structureFromPage(page: FetchedPage): ExtractedJob {
   const ld = page.ld;
@@ -436,6 +517,8 @@ export function structureFromPage(page: FetchedPage): ExtractedJob {
   const location = labeled(["근무지", "근무\\s*지역", "Location"]) || ldLocation;
   const deadline = labeled(["마감일", "접수\\s*기간", "마감", "Deadline"]) || (ld ? firstString((ld as Record<string, unknown>).validThrough) : "");
 
+  const link = extractApplyLink(page.html, page.finalUrl, ld);
+
   return {
     company: company.slice(0, 80),
     role: role.slice(0, 80),
@@ -445,7 +528,10 @@ export function structureFromPage(page: FetchedPage): ExtractedJob {
     responsibilities: sections.responsibilities,
     requirements: sections.requirements,
     preferred: sections.preferred,
+    documents: sections.documents,
     tone: sections.tone,
+    applyUrl: link.applyUrl,
+    applyLabel: link.applyLabel,
   };
 }
 

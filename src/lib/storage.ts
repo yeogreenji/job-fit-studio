@@ -1,4 +1,4 @@
-import type { AiConfig, ApplicationEntry, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
+import type { AiConfig, ApplicationEntry, ApplyStatus, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
 import { EMPTY_RESUME } from "./presets";
 
 const RESUME_KEY = "jobfit.resume.v1";
@@ -6,7 +6,9 @@ const PACKAGES_KEY = "jobfit.packages.v1";
 const API_KEY = "jobfit.api.v2";
 const LEGACY_API_KEY = "jobfit.api.v1";
 const TRACKER_KEY = "jobfit.tracker.v1";
+const HUB_KEY = "jobfit.hub.jobs.v1";
 const MAX_PACKAGES = 20;
+const MAX_HUB_JOBS = 40;
 
 export const STAGES: Stage[] = ["준비중", "서류", "1차", "2차", "최종", "오퍼"];
 
@@ -264,6 +266,45 @@ export function persistResumeMeta(meta: ResumeMeta) {
     localStorage.setItem(RESUME_META_KEY, JSON.stringify(meta));
   } catch {
     /* ignore */
+  }
+}
+
+/* ── 공고 수집·직접 지원 허브 ── */
+
+const APPLY_STATUS_VALUES: ApplyStatus[] = ["지원 전", "준비중", "지원완료", "서류합격", "면접"];
+
+/** 허브에 모은 공고. 공고 원문·지원 링크·상태·메모·지원 문구를 이 브라우저에 저장합니다. */
+export function loadHubJobs(): HubJob[] {
+  try {
+    const raw = localStorage.getItem(HUB_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as HubJob[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item && typeof item.id === "string" && item.job && typeof item.job === "object")
+      .map((item) => ({
+        ...item,
+        applyUrl: item.applyUrl || item.job.applyUrl || item.source?.url || "",
+        status: APPLY_STATUS_VALUES.includes(item.status) ? item.status : "지원 전",
+        memo: typeof item.memo === "string" ? item.memo : "",
+        documentsChecked: Array.isArray(item.documentsChecked) ? item.documentsChecked.filter((value) => typeof value === "string") : [],
+        job: {
+          ...item.job,
+          documents: item.job.documents ?? "",
+          applyUrl: item.job.applyUrl || item.applyUrl || item.source?.url || "",
+        },
+      }))
+      .slice(0, MAX_HUB_JOBS);
+  } catch {
+    return [];
+  }
+}
+
+export function persistHubJobs(jobs: HubJob[]) {
+  try {
+    localStorage.setItem(HUB_KEY, JSON.stringify(jobs.slice(0, MAX_HUB_JOBS)));
+  } catch {
+    /* 저장 공간이 없으면 조용히 넘어갑니다 */
   }
 }
 

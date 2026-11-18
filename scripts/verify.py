@@ -1,27 +1,27 @@
 """
-JobFit Studio E2E 검증 — URL·이력서 중심 재설계.
+JobFit Studio E2E 검증 — 공고 수집·직접 지원 허브.
 
 검사 범위
-  · /api/analyze: job_url(수집·차단·사설망·키 없음), recommend, package, interview_eval, Gemini 경로
-  · 화면: 이력서 1회 등록(.txt/.md/.pdf) → 공고 URL → 우선순위 → 지원 패키지 → 복사·90초 연습
-  · 폴백: 스크래핑 차단 시 본문 붙여넣기, 키 없음, 정적 호스팅(서버 없음)
-  · 레이아웃: 390px 가로 넘침 0, 콘솔 에러 0
+  · /api/analyze: job_url(수집·제출서류·지원 링크·차단·사설망·키 없음), apply_kit, package, recommend, Gemini 경로
+  · 화면: 여러 공고 URL 한 번에 수집 → 요건·제출서류·지원 문구 → 원문 직접 지원 링크 → 상태·메모 → 트래커
+  · 보조: 면접·협상 심층 준비(패키지), 히스토리
+  · 폴백: 차단 사이트 본문 붙여넣기, 키 없음(규칙 문안), 정적 호스팅(서버 없음)
+  · 레이아웃: 390px 가로 넘침 0, 콘솔 에러 0, 개인정보 0건
 """
 
 import os, json, subprocess, sys, time, socket, atexit, urllib.request, urllib.error
-if os.path.isdir("/workspace/.cache/ms-playwright"):
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
-if os.path.isdir("/workspace/.libs/usr/lib/x86_64-linux-gnu"):
-    os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + ((":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else "")
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
+os.environ["LD_LIBRARY_PATH"] = "/workspace/.libs/usr/lib/x86_64-linux-gnu" + ((":" + os.environ["LD_LIBRARY_PATH"]) if os.environ.get("LD_LIBRARY_PATH") else "")
 from playwright.sync_api import sync_playwright
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NODE = os.environ.get("NODE_BIN", "node")
+ROOT = "/workspace/projects/job-fit-studio"
+NODE = "/workspace/.tools/node-v22.12.0-linux-x64/bin/node"
 FIXTURES = os.path.join(ROOT, "scripts/fixtures")
 
 checks = []
 errors = []
 servers = []
+server_by_port = {}
 
 
 def check(name, cond, detail=""):
@@ -31,12 +31,15 @@ def check(name, cond, detail=""):
 
 
 def step(name, fn):
+    started = time.time()
     print(f"── {name}", flush=True)
     try:
         fn()
     except Exception as exc:  # noqa: BLE001
-        checks.append((name, False, f"exception: {type(exc).__name__}: {str(exc)[:200]}"))
-        print(f"FAIL {name}  <exception: {type(exc).__name__}: {str(exc)[:180]}>", flush=True)
+        checks.append((name, False, f"exception: {type(exc).__name__}: {str(exc)[:240]}"))
+        print(f"FAIL {name}  <exception: {type(exc).__name__}: {str(exc)[:200]}>", flush=True)
+    finally:
+        print(f"   ({time.time() - started:.1f}s)", flush=True)
 
 
 def start_server(mode, port):
@@ -47,6 +50,7 @@ def start_server(mode, port):
         pass
     proc = subprocess.Popen([NODE, "scripts/e2e-server.mjs", mode, str(port)], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     servers.append(proc)
+    server_by_port[port] = proc
     deadline = time.time() + 45
     while time.time() < deadline:
         try:
@@ -55,6 +59,19 @@ def start_server(mode, port):
         except OSError:
             time.sleep(0.3)
     raise RuntimeError(f"server {mode}:{port} did not start")
+
+
+def stop_port(port):
+    proc = server_by_port.pop(port, None)
+    if not proc:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except Exception:
+        proc.kill()
+    if proc in servers:
+        servers.remove(proc)
 
 
 def stop_servers():
@@ -79,16 +96,12 @@ def attach(page, tag):
     page.on("pageerror", lambda exc: errors.append(f"[{tag}:pageerror] {exc}"))
 
 
+def hub_jobs(page):
+    return page.evaluate("JSON.parse(localStorage.getItem('jobfit.hub.jobs.v1')||'[]')")
+
+
 def packages(page):
     return page.evaluate("JSON.parse(localStorage.getItem('jobfit.packages.v1')||'[]')")
-
-
-def tracker(page):
-    return page.evaluate("JSON.parse(localStorage.getItem('jobfit.tracker.v1')||'[]')")
-
-
-def prefs(page):
-    return page.evaluate("JSON.parse(localStorage.getItem('jobfit.prefs.v1')||'{}')")
 
 
 def no_overflow(page):
@@ -102,6 +115,18 @@ def wait_attr(page, selector, attr, value, timeout=15000):
         if got == value:
             return True
         page.wait_for_timeout(200)
+    return False
+
+
+def wait_text(page, selector, needle, timeout=20000):
+    deadline = time.time() + timeout / 1000
+    while time.time() < deadline:
+        try:
+            if needle in page.inner_text(selector):
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        page.wait_for_timeout(250)
     return False
 
 
@@ -130,12 +155,13 @@ RESUME_PAYLOAD = {
 }
 
 JOB_PAYLOAD = {
-    "company": "노바커머스",
-    "role": "브랜드 커뮤니케이션 매니저",
-    "responsibilities": "브랜드 캠페인 기획과 실행\n인플루언서 협업 운영",
-    "requirements": "경력 4년 이상\nSNS 채널 운영 실무",
-    "preferred": "커머스 산업 경험",
-    "tone": "빠른 실험",
+    "company": "루멘스튜디오",
+    "role": "PR 매니저",
+    "responsibilities": "브랜드·작품 보도자료 작성과 언론 대응\n위기 이슈 대응 메시지와 공식 입장문 작성",
+    "requirements": "PR 또는 커뮤니케이션 경력 5년 이상\n보도자료 작성과 미디어 대응 실무 경험",
+    "preferred": "엔터테인먼트 산업 경험",
+    "documents": "이력서 1부\n경력기술서 1부",
+    "tone": "작품과 사람을 먼저 보는 팀",
 }
 
 AI = "http://127.0.0.1:4383/"
@@ -154,7 +180,11 @@ start_server("strict", 4387)
 print("── API", flush=True)
 status, body, headers = api(4383)
 check("api GET status", status == 200 and body.get("ok") is True and body.get("ai") is True, str(body)[:120])
-check("api modes include job_url", "job_url" in (body.get("modes") or []) and "recommend" in (body.get("modes") or []), str(body.get("modes")))
+check(
+    "api modes include hub modes",
+    {"job_url", "apply_kit", "package", "recommend"}.issubset(set(body.get("modes") or [])),
+    str(body.get("modes")),
+)
 check("api urlFetch flag", body.get("urlFetch") is True, str(body.get("urlFetch")))
 check("api CORS header", headers.get("Access-Control-Allow-Origin") == "*", str(headers.get("Access-Control-Allow-Origin")))
 status, _, _ = api(4383, "OPTIONS")
@@ -164,24 +194,34 @@ check("api bad mode 400", status == 400 and body["error"]["code"] == "bad_mode",
 status, body, _ = api(4383, "POST", {"mode": "package", "job": {"company": "x"}, "resume": {}})
 check("api bad job 400", status == 400 and body["error"]["code"] == "bad_job", str(body)[:120])
 
-# job_url — AI 정리
+# job_url — 원티드(AI 정리, 지원 링크=공고 URL)
 status, body, _ = api(4383, "POST", {"mode": "job_url", "jobUrl": "https://www.wanted.co.kr/wd/123456"})
 job = body.get("job") or {}
-check("job_url 200", status == 200 and body.get("ok") is True, f"{status} {str(body)[:140]}")
-check("job_url engine ai", body.get("engine") == "ai" and body.get("model"), f"{body.get('engine')} {body.get('model')}")
-check("job_url company", job.get("company") == "노바커머스", str(job.get("company")))
-check("job_url role", job.get("role") == "브랜드 커뮤니케이션 매니저", str(job.get("role")))
-check("job_url responsibilities 4 lines", len([line for line in (job.get("responsibilities") or "").split("\n") if line.strip()]) == 4, str(job.get("responsibilities"))[:120])
-check("job_url requirements", "경력 4년 이상" in (job.get("requirements") or ""), str(job.get("requirements"))[:120])
-check("job_url meta site", (body.get("meta") or {}).get("site") == "원티드", str(body.get("meta"))[:160])
-check("job_url meta chars", (body.get("meta") or {}).get("chars", 0) > 300, str((body.get("meta") or {}).get("chars")))
+check("job_url wanted 200", status == 200 and body.get("ok") is True, f"{status} {str(body)[:140]}")
+check("job_url wanted engine ai", body.get("engine") == "ai" and body.get("model"), f"{body.get('engine')} {body.get('model')}")
+check("job_url wanted company", job.get("company") == "노바커머스", str(job.get("company")))
+check("job_url wanted role", job.get("role") == "브랜드 커뮤니케이션 매니저", str(job.get("role")))
+check("job_url wanted responsibilities", "브랜드 캠페인" in (job.get("responsibilities") or ""), str(job.get("responsibilities"))[:120])
+check("job_url wanted apply url fallback", job.get("applyUrl") == "https://www.wanted.co.kr/wd/123456", str(job.get("applyUrl")))
+check("job_url wanted site", (body.get("meta") or {}).get("site") == "원티드", str(body.get("meta"))[:160])
 
-# job_url — 차단된 사이트
+# job_url — 잡코리아(제출서류·원문 지원 링크)
+status, body, _ = api(4383, "POST", {"mode": "job_url", "jobUrl": "https://www.jobkorea.co.kr/Recruit/GI_Read/987654"})
+job = body.get("job") or {}
+check("job_url jobkorea 200", status == 200 and body.get("ok") is True, f"{status} {str(body)[:140]}")
+check("job_url jobkorea company", job.get("company") == "루멘스튜디오", str(job.get("company")))
+check("job_url jobkorea role", job.get("role") == "PR 매니저", str(job.get("role")))
+check("job_url jobkorea documents", "이력서 1부" in (job.get("documents") or "") and "포트폴리오" in (job.get("documents") or ""), str(job.get("documents"))[:140])
+check("job_url jobkorea requirements", "경력 5년 이상" in (job.get("requirements") or ""), str(job.get("requirements"))[:120])
+check("job_url jobkorea deadline", "2026-11-30" in (job.get("deadline") or ""), str(job.get("deadline")))
+check("job_url jobkorea apply url", job.get("applyUrl") == "https://www.jobkorea.co.kr/Recruit/Apply/987654", str(job.get("applyUrl")))
+check("job_url jobkorea apply label", job.get("applyLabel") == "입사지원", str(job.get("applyLabel")))
+check("job_url jobkorea site", (body.get("meta") or {}).get("site") == "잡코리아", str(body.get("meta"))[:160])
+
+# job_url — 차단·잘못된 주소·사설망
 status, body, _ = api(4383, "POST", {"mode": "job_url", "jobUrl": "https://blocked-careers.example/jobs/1"})
 check("job_url blocked 422", status == 422 and body["error"]["code"] == "fetch_blocked", f"{status} {str(body)[:140]}")
 check("job_url blocked site", (body.get("error") or {}).get("site") == "blocked-careers.example", str(body.get("error"))[:140])
-
-# job_url — 잘못된 주소와 사설망
 status, body, _ = api(4383, "POST", {"mode": "job_url", "jobUrl": "not-a-url"})
 check("job_url bad url", status in (400, 422) and body["error"]["code"] in ("bad_url", "fetch_failed"), f"{status} {str(body)[:120]}")
 status, body, _ = api(4383, "POST", {"mode": "job_url", "jobUrl": "ftp://example.com/x"})
@@ -190,65 +230,65 @@ status, body, _ = api(4387, "POST", {"mode": "job_url", "jobUrl": "http://127.0.
 check("job_url blocks private host", status == 400 and body["error"]["code"] == "bad_url", f"{status} {str(body)[:140]}")
 
 # job_url — 키 없이 규칙 정리
-status, body, _ = api(4385, "POST", {"mode": "job_url", "jobUrl": "https://www.wanted.co.kr/wd/123456"})
+status, body, _ = api(4385, "POST", {"mode": "job_url", "jobUrl": "https://www.jobkorea.co.kr/Recruit/GI_Read/987654"})
 check("job_url works without key", status == 200 and body.get("engine") == "rule", f"{status} {str(body)[:140]}")
-check("job_url rule company", (body.get("job") or {}).get("company") == "노바커머스", str((body.get("job") or {}).get("company")))
-check("job_url rule sections", "브랜드 캠페인" in ((body.get("job") or {}).get("responsibilities") or ""), str((body.get("job") or {}).get("responsibilities"))[:120])
+check("job_url rule documents", "이력서 1부" in (((body.get("job") or {}).get("documents")) or ""), str((body.get("job") or {}).get("documents"))[:120])
+check("job_url rule apply url", (body.get("job") or {}).get("applyUrl") == "https://www.jobkorea.co.kr/Recruit/Apply/987654", str((body.get("job") or {}).get("applyUrl")))
 
-# recommend
-status, body, _ = api(4383, "POST", {"mode": "recommend", "resume": RESUME_PAYLOAD, "priorityLabel": "연봉 점프"})
+# apply_kit
+status, body, _ = api(4383, "POST", {"mode": "apply_kit", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
 data = body.get("data") or {}
-check("recommend 200", status == 200 and len(data.get("titles") or []) == 3, f"{status} {str(body)[:140]}")
-check("recommend salary band", (data.get("salaryBand") or {}).get("min", 0) > 0 and (data.get("salaryBand") or {}).get("basis"), str(data.get("salaryBand"))[:120])
-check("recommend targets", len(data.get("targets") or []) == 3, str(data.get("targets"))[:120])
-status, body, _ = api(4385, "POST", {"mode": "recommend", "resume": RESUME_PAYLOAD})
-check("recommend no key 501", status == 501 and body["error"]["code"] == "no_key", f"{status} {str(body)[:120]}")
+check("apply_kit 200", status == 200 and bool(data.get("oneLiner")), f"{status} {str(body)[:140]}")
+check("apply_kit cover letter", len(data.get("coverLetter") or "") > 150, str(len(data.get("coverLetter") or "")))
+check("apply_kit key points", len(data.get("keyPoints") or []) == 3, str(data.get("keyPoints"))[:120])
+status, body, _ = api(4385, "POST", {"mode": "apply_kit", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
+check("apply_kit no key 501", status == 501 and body["error"]["code"] == "no_key", f"{status} {str(body)[:120]}")
 
-# package
+# package / recommend (심층 준비 계약 유지)
 status, body, _ = api(4383, "POST", {"mode": "package", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD, "priorityLabel": "연봉 점프", "targetSalary": 5500})
 data = body.get("data") or {}
 check("package 200", status == 200 and bool(data.get("fit")), f"{status} {str(body)[:140]}")
 check("package onePoint", bool((data.get("fit") or {}).get("onePoint", {}).get("body")), str((data.get("fit") or {}).get("onePoint"))[:120])
 check("package question answer", bool((data.get("questions") or [{}])[0].get("answer")), str((data.get("questions") or [{}])[0])[:120])
 check("package negotiation", "5,500" in ((data.get("negotiation") or {}).get("opener") or ""), str((data.get("negotiation") or {}).get("opener"))[:140])
-
-# interview_eval
-status, body, _ = api(4383, "POST", {"mode": "interview_eval", "question": "위기 이슈를 어떻게 대응하나요?", "answer": "당시 위기 이슈가 터졌고 제가 먼저 입장문 초안을 작성해 24시간 내 배포했습니다."})
-check("eval 200", status == 200 and (body.get("data") or {}).get("score") is not None, f"{status} {str(body)[:120]}")
-
-# Gemini 경로
+status, body, _ = api(4383, "POST", {"mode": "recommend", "resume": RESUME_PAYLOAD, "priorityLabel": "연봉 점프"})
+data = body.get("data") or {}
+check("recommend 200", status == 200 and len(data.get("titles") or []) == 3, f"{status} {str(body)[:140]}")
 status, body, _ = api(4386)
 check("gemini status", status == 200 and body.get("provider") == "gemini" and body.get("model") == "gemini-3.5-flash-lite", f"{status} {str(body)[:140]}")
-status, body, _ = api(4386, "POST", {"mode": "job_url", "jobUrl": "https://www.wanted.co.kr/wd/123456"})
-check("gemini job_url", status == 200 and body.get("provider") == "gemini" and (body.get("job") or {}).get("company") == "노바커머스", f"{status} {str(body)[:140]}")
-status, body, _ = api(4385, "POST", {"mode": "package", "apiKey": "AQ.real-user-gemini-key-0001", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
-check("gemini AQ request key", status == 200 and body.get("provider") == "gemini", f"{status} {str(body)[:120]}")
+status, body, _ = api(4386, "POST", {"mode": "apply_kit", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
+check("gemini apply_kit", status == 200 and body.get("provider") == "gemini" and bool((body.get("data") or {}).get("oneLiner")), f"{status} {str(body)[:140]}")
+status, body, _ = api(4385, "POST", {"mode": "apply_kit", "apiKey": "AQ.real-user-gemini-key-0001", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
+check("gemini request key apply_kit", status == 200 and body.get("provider") == "gemini", f"{status} {str(body)[:120]}")
 status, _, _ = api(4384)
 check("offline api 404", status == 404, str(status))
+
+# 브라우저 단계에서는 서버를 하나씩만 띄워 프로세스 한도를 넘지 않게 합니다.
+for port in (4384, 4385, 4386, 4387):
+    stop_port(port)
 
 
 with sync_playwright() as p:
     browser = p.chromium.launch()
 
-    # ────────────────────────── 첫 화면 (이력서 없음) ──────────────────────────
+    # ────────────────────────── 첫 화면 ──────────────────────────
     ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR", accept_downloads=True, permissions=["clipboard-read", "clipboard-write"])
     page = ctx.new_page()
     page.set_default_timeout(12000)
     attach(page, "ai")
     page.goto(AI, wait_until="domcontentloaded")
     page.wait_for_timeout(900)
-    page.click("[data-testid=nav-studio]")
-    page.wait_for_timeout(200)
 
     def first_screen():
         check("banner live", wait_attr(page, "[data-testid=mode-banner]", "data-mode", "live"))
+        check("hub heading", page.get_by_text("지원은 한 곳에서").count() >= 1)
+        check("multi url textarea", page.locator("[data-testid=hub-urls]").count() == 1)
+        check("hub empty count", page.inner_text("[data-testid=hub-count]") == "0")
+        check("hub fetch disabled when empty", page.locator("[data-testid=hub-fetch]").is_disabled())
         check("resume not registered", page.locator("[data-testid=resume-file-btn]").count() == 1)
-        check("resume prompt copy", page.get_by_text("한 번만").count() > 0)
-        check("no recommend before resume", page.get_by_text("이력서를 등록하면").count() > 0)
-        check("job url input", page.locator("[data-testid=job-url]").count() == 1)
-        check("generate disabled", page.locator("[data-testid=generate]").is_disabled())
-        check("hint asks resume", "내 인력서" in page.inner_text("[data-testid=generate-hint]") or "내 이력서" in page.inner_text("[data-testid=generate-hint]"))
-        check("priority chips 4", page.get_by_role("radio").count() == 4, str(page.get_by_role("radio").count()))
+        check("no score-first section", page.locator("[data-testid=section-fit]").count() == 0)
+        check("no score wording", page.get_by_text("합격 가능성").count() == 0)
+        check("detail empty state", page.get_by_text("공고를 모으면 여기에 지원 내용이 열립니다").count() == 1)
 
     step("first screen", first_screen)
 
@@ -259,241 +299,197 @@ with sync_playwright() as p:
         page.wait_for_timeout(600)
         check("resume registered", "등록됨" in page.inner_text("[data-testid=resume-status]"))
         check("resume name", page.inner_text("[data-testid=resume-name]") == "김하람")
-        meta = page.evaluate("JSON.parse(localStorage.getItem('jobfit.resume.meta.v1')||'{}')")
-        check("resume meta file", meta.get("source") == "file" and meta.get("fileName") == "my-resume.txt", str(meta))
         saved = page.evaluate("JSON.parse(localStorage.getItem('jobfit.resume.v1')||'{}')")
-        check("resume persisted", isinstance(saved.get("experiences"), list) and len(saved["experiences"]) == 2, str(len(saved.get("experiences") or [])))
+        check("resume persisted", len(saved.get("experiences") or []) == 2, str(len(saved.get("experiences") or [])))
         page.reload(wait_until="domcontentloaded")
         page.wait_for_timeout(1200)
-        page.click("[data-testid=nav-studio]")
-        page.wait_for_timeout(300)
-        check("resume reused after reload", page.locator("[data-testid=resume-status]").count() == 1 and page.inner_text("[data-testid=resume-name]") == "김하람")
+        check("resume reused after reload", page.inner_text("[data-testid=resume-name]") == "김하람")
 
     step("resume upload", resume_upload)
 
-    def recommend_panel():
-        page.wait_for_selector("[data-testid=recommend-title-0]", timeout=12000)
-        check("recommend 3 titles", page.locator("[data-testid^=recommend-title-]").count() == 3)
-        check("recommend targets", page.locator("[data-testid^=recommend-target-]").count() == 3)
-        links = page.locator("[data-testid=search-원티드]")
-        check("search links wanted", links.count() == 3 and "wanted.co.kr" in (links.first.get_attribute("href") or ""), links.first.get_attribute("href"))
-        linkedin = page.locator("[data-testid=search-링크드인]").first.get_attribute("href") or ""
-        check("search links linkedin", "linkedin.com/jobs" in linkedin, linkedin)
-        check("salary band labelled estimate", page.get_by_text("추정").count() >= 1)
-        page.locator("[data-testid=recommend-refresh]").click()
-        page.wait_for_timeout(2500)
-        check("recommend AI source", "AI 추천" in page.inner_text("[data-testid=recommend]"), page.inner_text("[data-testid=recommend]")[-80:])
+    # ────────────────────────── 여러 공고 한 번에 ──────────────────────────
+    def multi_add():
+        page.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654\nhttps://www.wanted.co.kr/wd/123456")
+        check("url count 2", "2" in page.inner_text("[data-testid=hub-url-count]"), page.inner_text("[data-testid=hub-url-count]"))
+        page.click("[data-testid=hub-fetch]")
+        page.wait_for_selector("[data-testid=hub-detail]", timeout=40000)
+        deadline = time.time() + 30
+        while time.time() < deadline and page.locator("[data-testid=hub-job]").count() < 2:
+            page.wait_for_timeout(300)
+        check("two job cards", page.locator("[data-testid=hub-job]").count() == 2, str(page.locator("[data-testid=hub-job]").count()))
+        check("hub count 2", page.inner_text("[data-testid=hub-count]") == "2")
+        jobs = hub_jobs(page)
+        check("hub saved 2", len(jobs) == 2, str(len(jobs)))
+        companies = {job["job"]["company"] for job in jobs}
+        check("hub companies distinct", companies == {"루멘스튜디오", "노바커머스"}, str(companies))
+        check("hub default status", all(job["status"] == "지원 전" for job in jobs), str([job["status"] for job in jobs]))
+        check("hub apply urls saved", any(job["applyUrl"].endswith("/Recruit/Apply/987654") for job in jobs), str([job["applyUrl"] for job in jobs]))
+        check("hub documents saved", any("이력서 1부" in (job["job"].get("documents") or "") for job in jobs), str([job["job"].get("documents") for job in jobs]))
 
-    step("recommend panel", recommend_panel)
+    step("multi url add", multi_add)
 
-    # ────────────────────────── 공고 URL ──────────────────────────
-    def job_url():
-        page.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        page.click("[data-testid=job-fetch]")
-        page.wait_for_selector("[data-testid=job-preview]", timeout=25000)
+    def jobkorea_detail():
+        page.locator("[data-testid=hub-job]", has_text="루멘스튜디오").first.click()
         page.wait_for_timeout(500)
-        check("job preview company", "노바커머스" in page.inner_text("[data-testid=job-preview-company]"))
-        check("job preview role", "브랜드 커뮤니케이션" in page.inner_text("[data-testid=job-preview-role]"))
-        check("job preview summary", "담당 업무 4줄" in page.inner_text("[data-testid=job-preview-summary]"), page.inner_text("[data-testid=job-preview-summary]"))
-        check("job source site", "원티드" in page.inner_text("[data-testid=job-preview]"))
-        check("generate enabled", not page.locator("[data-testid=generate]").is_disabled())
+        check("detail company", page.inner_text("[data-testid=detail-company]") == "루멘스튜디오", page.inner_text("[data-testid=detail-company]"))
+        check("detail role", "PR 매니저" in page.inner_text("[data-testid=detail-role]"), page.inner_text("[data-testid=detail-role]"))
+        check("detail site", "잡코리아" in page.inner_text("[data-testid=detail-site]"), page.inner_text("[data-testid=detail-site]"))
+        check("detail deadline", "2026-11-30" in page.inner_text("[data-testid=detail-deadline]"), page.inner_text("[data-testid=detail-deadline]"))
+        check("req duties", "보도자료" in page.inner_text("[data-testid=req-responsibilities]"), page.inner_text("[data-testid=req-responsibilities]")[:100])
+        check("req requirements", "경력 5년" in page.inner_text("[data-testid=req-requirements]"), page.inner_text("[data-testid=req-requirements]")[:100])
+        check("req preferred", "엔터테인먼트" in page.inner_text("[data-testid=req-preferred]"), page.inner_text("[data-testid=req-preferred]")[:100])
+        check("req documents list", page.locator("[data-testid=doc-item]").count() == 4, str(page.locator("[data-testid=doc-item]").count()))
+        link = page.locator("[data-testid=apply-link]")
+        check("apply link href", link.get_attribute("href") == "https://www.jobkorea.co.kr/Recruit/Apply/987654", str(link.get_attribute("href")))
+        check("apply link new tab", link.get_attribute("target") == "_blank")
 
-    step("job url fetch", job_url)
+    step("jobkorea detail", jobkorea_detail)
 
-    def priority_and_salary():
-        page.click("[data-testid=priority-balance]")
-        page.wait_for_timeout(300)
-        check("priority selected", page.get_attribute("[data-testid=priority-balance]", "aria-checked") == "true")
-        check("priority others off", page.get_attribute("[data-testid=priority-salary]", "aria-checked") == "false")
-        page.fill("[data-testid=target-salary]", "5500")
-        page.wait_for_timeout(400)
-        saved = prefs(page)
-        check("prefs saved", saved.get("priority") == "balance" and saved.get("targetSalary") == 5500, str(saved))
+    def apply_kit():
+        check("draft source appears", page.locator("[data-testid=draft-source]").count() == 1)
+        check("draft becomes AI", wait_text(page, "[data-testid=draft-source]", "AI 초안", 20000), page.inner_text("[data-testid=draft-source]"))
+        one = page.inner_text("[data-testid=apply-one-liner]")
+        check("one liner rendered", len(one) > 20, one[:80])
+        cover = page.inner_text("[data-testid=apply-cover]")
+        check("cover letter rendered", "루멘스튜디오" in cover or "보도자료" in cover, cover[:120])
+        check("key points rendered", page.locator("[data-testid=apply-cover] ~ div li").count() >= 2 or page.get_by_text("강조할 경력 문장").count() == 1)
+        check("grounding warning shown", "근거 확인 제외" in page.inner_text("[data-testid=hub-apply-kit]"), page.inner_text("[data-testid=hub-apply-kit]")[:160])
+        body_text = page.inner_text("body")
+        check("fabricated numbers absent", "777억" not in body_text and "999억" not in body_text)
+        draft = next(job["draft"] for job in hub_jobs(page) if job["job"]["company"] == "루멘스튜디오")
+        check("AI draft saved", draft.get("source") == "ai" and draft.get("model"), str(draft.get("source")))
+        check("AI draft has cover", len(draft.get("coverLetter") or "") > 150, str(len(draft.get("coverLetter") or "")))
+        check("AI draft warnings kept", (draft.get("warnings") or 0) > 0, str(draft.get("warnings")))
 
-    step("priority chips", priority_and_salary)
+    step("apply kit", apply_kit)
 
-    # ────────────────────────── 지원 패키지 ──────────────────────────
-    def generate():
-        page.click("[data-testid=generate]")
-        page.wait_for_selector("[data-testid=result]", timeout=45000)
-        page.wait_for_timeout(2500)
-        check("engine chip AI", "AI 분석" in page.inner_text("[data-testid=package-engine]"), page.inner_text("[data-testid=package-engine]"))
-        check("source chip", "원티드" in page.inner_text("[data-testid=result-source]"))
-        pkg = packages(page)[0]
-        check("package saved", len(packages(page)) == 1)
-        check("package priority", pkg.get("priority") == "balance", str(pkg.get("priority")))
-        check("package source url", (pkg.get("source") or {}).get("kind") == "url", str(pkg.get("source")))
-        check("package negotiation target", "5,500" in ((pkg.get("negotiation") or {}).get("opener") or ""), str((pkg.get("negotiation") or {}).get("opener"))[:100])
-        check("fabricated rewrite dropped", all("999억" not in r["after"] for r in pkg["rewrites"]))
-        check("fabricated number absent", "999억" not in page.inner_text("body"))
-
-    step("generate package", generate)
-
-    def sections():
-        check("section fit", page.locator("[data-testid=section-fit]").count() == 1)
-        check("section pitch", page.locator("[data-testid=section-pitch]").count() == 1)
-        check("section interview", page.locator("[data-testid=section-interview]").count() == 1)
-        check("section offer", page.locator("[data-testid=section-offer]").count() == 1)
-        check("one point strategy", page.locator("[data-testid=one-point]").count() == 1)
-        check("intro ai", "AI 생성" in page.inner_text("[data-testid=intro-source]"), page.inner_text("[data-testid=intro-source]"))
-        length_text = page.inner_text("[data-testid=intro-length]")
-        chars = int("".join(ch for ch in length_text.split("자")[0] if ch.isdigit()) or 0)
-        check("intro length 250-900", 250 <= chars <= 900, length_text)
-        check("intro quotes source", any(token in page.inner_text("[data-testid=intro-text]") for token in ["28%", "140건", "4.2만"]), page.inner_text("[data-testid=intro-text]")[:120])
-        check("highlight copy", page.get_by_role("button", name="전체 복사").count() >= 1)
-        check("score ring", page.locator("svg circle").count() >= 1)
-
-    step("result sections", sections)
-
-    def drills():
-        check("5 question cards", page.locator("[data-testid^=drill-]:not([data-testid*=timer]):not([data-testid*=text]):not([data-testid*=start]):not([data-testid*=submit]):not([data-testid*=feedback]):not([data-testid*=score]):not([data-testid*=answer])").count() == 5)
-        check("model answer present", page.inner_text("[data-testid=drill-answer-0]").strip() != "")
-        check("avoid answer present", "피해야 할 답변" in page.inner_text("[data-testid=drill-0]"))
-        pkg = packages(page)[0]
-        answers = [q.get("answer") for q in pkg["questions"][:5]]
-        check("all questions have script", all(answers) and len(answers) == 5, str([bool(a) for a in answers]))
-        check("ai answers used", [q.get("answerSource") for q in pkg["questions"][:5]] == ["ai"] * 5, str([q.get("answerSource") for q in pkg["questions"][:5]]))
-
-    step("question scripts", drills)
-
-    def timer():
-        check("timer starts 01:30", page.inner_text("[data-testid=drill-timer-0]") == "01:30")
-        page.click("[data-testid=drill-start-0]")
-        page.wait_for_timeout(2600)
-        timer_text = page.inner_text("[data-testid=drill-timer-0]")
-        left = int(timer_text.split(":")[0]) * 60 + int(timer_text.split(":")[1])
-        check("timer counts down", 0 < left < 90, timer_text)
-        answer = "당시 위기 이슈가 터졌고 제가 먼저 입장문 초안을 작성해 24시간 내 배포했습니다. 이후 대응 매뉴얼을 만들었습니다."
-        page.fill("[data-testid=drill-text-0]", answer)
-        page.click("[data-testid=drill-submit-0]")
-        page.wait_for_selector("[data-testid=drill-feedback-0]", timeout=25000)
-        page.wait_for_timeout(500)
-        check("feedback score", page.inner_text("[data-testid=drill-score-0]").strip().replace("점", "").isdigit(), page.inner_text("[data-testid=drill-score-0]"))
-        check("follow-up question", len(page.inner_text("[data-testid=drill-feedback-0]")) > 40)
-        fb = packages(page)[0].get("feedback") or []
-        check("feedback saved", len(fb) == 1 and fb[0].get("source") == "ai", str(len(fb)))
-        check("fabricated praise dropped", "777억" not in page.inner_text("body"))
-
-    step("90s timer and feedback", timer)
-
-    def offer():
-        check("reverse 3", page.locator("[data-testid^=reverse-]").count() == 3)
-        check("negotiation block", page.locator("[data-testid=negotiation]").count() == 1)
-        text = page.inner_text("[data-testid=negotiation]")
-        check("negotiation shows target", "5,500만원" in text, text[:120])
-        check("negotiation priority label", "워라밸" in page.inner_text("[data-testid=section-offer]"), page.inner_text("[data-testid=section-offer]")[:120])
-        check("non-salary cards", "비연봉 카드" in text)
-        check("negotiation copy", page.get_by_role("button", name="전체 복사").count() >= 2)
-
-    step("offer section", offer)
-
-    def copy_button():
-        button = page.locator("[data-testid=section-pitch] button:has-text('소개 복사')").first
-        clipboard = page.evaluate("navigator.clipboard.writeText('EMPTY')")
-        button.click()
+    def copy_and_checklist():
+        page.evaluate("navigator.clipboard.writeText('EMPTY')")
+        page.locator("[data-testid=apply-one-liner] button:has-text('복사')").first.click()
         copied = ""
         for _ in range(20):
             copied = page.evaluate("navigator.clipboard.readText()")
             if copied and copied != "EMPTY":
                 break
             page.wait_for_timeout(50)
-        intro = page.inner_text("[data-testid=intro-text]")
-        check("clipboard holds intro", copied.strip()[:40] == intro.strip()[:40], repr(copied[:60]))
-        hint = page.locator("[data-testid=section-pitch] button:has-text('복사')").first.inner_text()
-        check("copy button keeps label", "복사" in hint, hint)
+        expected = page.inner_text("[data-testid=apply-one-liner]").replace("복사", "").strip()
+        check("clipboard holds one liner", copied.strip() and copied.strip() in expected, repr(copied[:80]))
+        page.locator("[data-testid=doc-item]").first.click()
+        page.wait_for_timeout(400)
+        job = next(job for job in hub_jobs(page) if job["job"]["company"] == "루멘스튜디오")
+        check("document check saved", len(job.get("documentsChecked") or []) == 1, str(job.get("documentsChecked")))
+        check("document check visual", page.locator("[data-testid=doc-item]").first.get_attribute("data-checked") == "true")
 
-    step("copy button", copy_button)
+    step("copy and checklist", copy_and_checklist)
 
-    def export_md():
-        with page.expect_download() as dl:
-            page.click("[data-testid=export-md]")
-        content = open(dl.value.path(), encoding="utf-8").read()
-        check("markdown length", len(content) > 3000, str(len(content)))
-        for section in ["적합도 요약", "원포인트 전략", "1분 자기소개", "처우 · 연봉 협상 스크립트", "모범 답변 스크립트", "피해야 할 답변", "제출 전 체크리스트"]:
-            check(f"markdown has {section}", section in content)
-        check("markdown source", "원티드" in content)
-        check("markdown target salary", "5,500만원" in content)
-        check("markdown no fabricated", "999억" not in content)
-
-    step("export markdown", export_md)
-
-    def regenerate():
-        page.click("[data-testid=regenerate]")
-        page.wait_for_timeout(4000)
-        check("regenerate stays AI", "AI 분석" in page.inner_text("[data-testid=package-engine]"))
-        check("regenerate keeps intro", packages(page)[0]["intro"]["source"] == "ai")
-
-    step("regenerate with AI", regenerate)
-
-    def tracker_view():
-        pending = tracker(page)
-        check("tracker auto entry", len(pending) == 1 and pending[0]["company"] == "노바커머스", str(pending)[:120])
-        page.click("[data-testid=open-tracker]")
-        page.wait_for_timeout(800)
-        check("tracker rows", page.locator("[data-testid=tracker-row]").count() == 1)
-        page.select_option("select[aria-label$='진행 단계']", "1차")
-        page.wait_for_timeout(600)
-        check("tracker stage saved", tracker(page)[0]["stage"] == "1차")
-        page.locator("input[aria-label='희망 연봉(만원)']").fill("5500")
+    def status_and_memo():
+        page.click("[data-testid=status-2]")
         page.wait_for_timeout(500)
-        check("tracker salary saved", tracker(page)[0]["salary"]["hope"] == 5500, str(tracker(page)[0]["salary"]))
+        check("status changed", page.inner_text("[data-testid=detail-status]") == "지원완료", page.inner_text("[data-testid=detail-status]"))
+        job = next(job for job in hub_jobs(page) if job["job"]["company"] == "루멘스튜디오")
+        check("status saved", job["status"] == "지원완료", job["status"])
+        page.fill("[data-testid=job-memo]", "담당자 김 매니저 · 11/20 서류 결과 연락 예정")
+        page.wait_for_timeout(500)
+        job = next(job for job in hub_jobs(page) if job["job"]["company"] == "루멘스튜디오")
+        check("memo saved", "김 매니저" in (job.get("memo") or ""), job.get("memo"))
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_timeout(1500)
+        check("hub persisted after reload", page.locator("[data-testid=hub-job]").count() == 2, str(page.locator("[data-testid=hub-job]").count()))
+        check("detail after reload", page.inner_text("[data-testid=detail-company]") == "루멘스튜디오", page.inner_text("[data-testid=detail-company]"))
+        check("memo after reload", "김 매니저" in page.input_value("[data-testid=job-memo]"), page.input_value("[data-testid=job-memo]"))
+        check("status after reload", page.inner_text("[data-testid=detail-status]") == "지원완료")
+        check("draft after reload", "AI 초안" in page.inner_text("[data-testid=draft-source]"))
+
+    step("status and memo", status_and_memo)
+
+    def second_job():
+        page.locator("[data-testid=hub-job]", has_text="노바커머스").first.click()
+        page.wait_for_timeout(1200)
+        check("second detail company", page.inner_text("[data-testid=detail-company]") == "노바커머스", page.inner_text("[data-testid=detail-company]"))
+        href = page.locator("[data-testid=apply-link]").get_attribute("href")
+        check("second apply link", href == "https://www.wanted.co.kr/wd/123456", str(href))
+        check("second draft exists", page.locator("[data-testid=apply-cover]").count() == 1)
+        check("second no document checklist", page.locator("[data-testid=doc-checklist]").count() == 0)
+        check("second documents hint", "제출서류 항목이 없습니다" in page.inner_text("[data-testid=req-documents]"), page.inner_text("[data-testid=req-documents]")[:100])
+        check("mark applied shown", page.locator("[data-testid=mark-applied]").count() == 1 if page.inner_text("[data-testid=detail-status]") == "지원 전" else True)
+
+    step("second job detail", second_job)
+
+    # ────────────────────────── 심층 준비 (보조) ──────────────────────────
+    def deep_prepare():
+        page.click("[data-testid=deep-open]")
+        page.wait_for_selector("[data-testid=result]", timeout=60000)
+        page.wait_for_timeout(2500)
+        check("deep section fit", page.locator("[data-testid=section-fit]").count() == 1)
+        check("deep section interview", page.locator("[data-testid=section-interview]").count() == 1)
+        check("deep section offer", page.locator("[data-testid=section-offer]").count() == 1)
+        check("deep package saved", len(packages(page)) >= 1, str(len(packages(page))))
+        check("deep intro ai", "AI 생성" in page.inner_text("[data-testid=intro-source]"), page.inner_text("[data-testid=intro-source]")[:60])
+        page.click("[data-testid=new-job]")
+        page.wait_for_timeout(700)
+        check("deep back to hub", page.locator("[data-testid=hub-urls]").count() == 1)
+        check("hub still has jobs", page.locator("[data-testid=hub-job]").count() == 2, str(page.locator("[data-testid=hub-job]").count()))
+
+    step("deep prepare", deep_prepare)
+
+    # ────────────────────────── 차단 → 본문 붙여넣기 ──────────────────────────
+    def paste_fallback():
+        page.fill("[data-testid=hub-urls]", "https://blocked-careers.example/jobs/1")
+        page.click("[data-testid=hub-fetch]")
+        page.wait_for_selector("[data-testid=hub-paste-panel]", timeout=30000)
+        check("blocked progress shown", wait_text(page, "[data-testid=hub-progress]", "자동 수집을 막았습니다", 15000), page.inner_text("[data-testid=hub-progress]")[:120])
+        page.fill("[data-testid=hub-paste-url]", "https://blocked-careers.example/jobs/1")
+        page.fill("[data-testid=hub-paste-text]", open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8").read())
+        page.click("[data-testid=hub-paste-add]")
+        page.wait_for_timeout(1000)
+        check("pasted job added", page.locator("[data-testid=hub-job]").count() == 3, str(page.locator("[data-testid=hub-job]").count()))
+        check("pasted source label", "본문 붙여넣기" in page.inner_text("[data-testid=detail-site]"), page.inner_text("[data-testid=detail-site]"))
+        check("pasted apply link", page.locator("[data-testid=apply-link]").get_attribute("href") == "https://blocked-careers.example/jobs/1")
+        check("pasted preview duties", "브랜드 캠페인" in page.inner_text("[data-testid=req-responsibilities]"), page.inner_text("[data-testid=req-responsibilities]")[:100])
+        page.click("[data-testid=mark-applied]")
+        page.wait_for_timeout(500)
+        check("mark applied works", page.inner_text("[data-testid=detail-status]") == "지원완료", page.inner_text("[data-testid=detail-status]"))
+        check("mark applied persisted", any(job["status"] == "지원완료" and job["source"]["kind"] == "paste" for job in hub_jobs(page)))
+
+    step("paste fallback", paste_fallback)
+
+    # ────────────────────────── 지원 현황 트래커 ──────────────────────────
+    def tracker_view():
+        page.click("[data-testid=nav-tracker]")
+        page.wait_for_timeout(900)
+        check("tracker 5 columns", page.locator("[data-testid^=tracker-column-]").count() == 5, str(page.locator("[data-testid^=tracker-column-]").count()))
+        check("tracker 3 cards", page.locator("[data-testid=tracker-card]").count() == 3, str(page.locator("[data-testid=tracker-card]").count()))
+        page.select_option("select[aria-label$='지원 상태']", "면접", timeout=10000)
+        page.wait_for_timeout(700)
+        check("tracker status saved", any(job["status"] == "면접" for job in hub_jobs(page)), str([job["status"] for job in hub_jobs(page)]))
+        check("tracker apply link", page.get_by_role("link", name="원문 지원 링크").count() >= 1)
         page.click("[data-testid=nav-studio]")
-        page.wait_for_timeout(600)
-        check("back to result", page.locator("[data-testid=result]").count() == 1)
+        page.wait_for_timeout(700)
+        check("back to hub from tracker", page.locator("[data-testid=hub-urls]").count() == 1)
 
     step("tracker view", tracker_view)
 
     def history_view():
         page.click("[data-testid=nav-history]")
         page.wait_for_timeout(800)
-        check("history rows", page.get_by_title("비교 대상으로 선택").count() == 1)
+        check("history heading", page.get_by_text("지원 패키지 히스토리").count() == 1)
+        check("history rows", page.get_by_title("비교 대상으로 선택").count() >= 1)
         page.click("[data-testid=nav-studio]")
         page.wait_for_timeout(500)
+        check("history back to hub", page.locator("[data-testid=hub-urls]").count() == 1)
 
     step("history view", history_view)
-
-    def new_job():
-        page.click("[data-testid=new-job]")
-        page.wait_for_timeout(700)
-        check("new job keeps resume", page.locator("[data-testid=resume-status]").count() == 1)
-        check("new job clears url", page.locator("[data-testid=job-url]").input_value() == "")
-        check("new job clears package", page.get_by_text("이력서는 한 번만").count() > 0)
-
-    step("new job flow", new_job)
-
-    # ────────────────────────── 붙여넣기 폴백 ──────────────────────────
-    def paste_fallback():
-        page.fill("[data-testid=job-url]", "https://blocked-careers.example/jobs/1")
-        page.click("[data-testid=job-fetch]")
-        page.wait_for_selector("[data-testid=job-fetch-error]", timeout=20000)
-        check("blocked error shown", "자동 수집을 막았습니다" in page.inner_text("[data-testid=job-fetch-error]"), page.inner_text("[data-testid=job-fetch-error]")[:120])
-        check("paste panel auto opened", page.locator("[data-testid=job-paste]").count() == 1)
-        check("paste panel open after block", page.locator("[data-testid=job-paste]").count() == 1)
-        with open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8") as handle:
-            page.fill("[data-testid=job-paste]", handle.read())
-        page.click("[data-testid=job-paste-analyze]")
-        page.wait_for_selector("[data-testid=job-preview]", timeout=15000)
-        page.wait_for_timeout(400)
-        check("paste preview company", "노바커머스" in page.inner_text("[data-testid=job-preview-company]"))
-        check("paste source label", "붙여넣은 본문" in page.inner_text("[data-testid=job-preview]"), page.inner_text("[data-testid=job-preview]")[:60])
-        page.click("[data-testid=generate]")
-        page.wait_for_selector("[data-testid=result]", timeout=45000)
-        page.wait_for_timeout(1500)
-        check("paste package source", "본문 붙여넣기" in page.inner_text("[data-testid=result-source]"))
-        page.click("[data-testid=new-job]")
-        page.wait_for_timeout(500)
-
-    step("paste fallback", paste_fallback)
+    ctx.close()
+    browser.close()
 
     # ────────────────────────── PDF 이력서 ──────────────────────────
     def pdf_resume():
-        pdf_ctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        pb = p.chromium.launch()
+        pdf_ctx = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         pp = pdf_ctx.new_page()
         attach(pp, "pdf")
         pp.goto(AI, wait_until="domcontentloaded")
         pp.wait_for_timeout(900)
-        pp.click("[data-testid=nav-studio]")
-        pp.wait_for_timeout(200)
         pp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.pdf"))
         pp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
         pp.wait_for_timeout(500)
@@ -502,256 +498,133 @@ with sync_playwright() as p:
         saved = pp.evaluate("JSON.parse(localStorage.getItem('jobfit.resume.v1')||'{}')")
         bullets = [b["text"] for exp in saved.get("experiences", []) for b in exp.get("bullets", [])]
         check("pdf bullets extracted", any("28%" in b for b in bullets), str(bullets)[:140])
-        meta = pp.evaluate("JSON.parse(localStorage.getItem('jobfit.resume.meta.v1')||'{}')")
-        check("pdf meta file", meta.get("fileName") == "my-resume.pdf", str(meta)[:120])
         pdf_ctx.close()
+        pb.close()
 
     step("pdf resume", pdf_resume)
+    stop_port(4383)
 
-    # ────────────────────────── 키 없음 (규칙 모드) ──────────────────────────
+    # ────────────────────────── 키 없음 (규칙 문안) ──────────────────────────
     def nokey_mode():
-        ctx3 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        start_server("nokey", 4385)
+        pb = p.chromium.launch()
+        ctx3 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         p3 = ctx3.new_page()
         attach(p3, "nokey")
         p3.goto(NOKEY, wait_until="domcontentloaded")
         p3.wait_for_timeout(1200)
-        p3.click("[data-testid=nav-studio]")
-        p3.wait_for_timeout(200)
         check("nokey banner local", wait_attr(p3, "[data-testid=mode-banner]", "data-mode", "local"))
         check("nokey note", p3.get_by_text("규칙 엔진").count() > 0)
         p3.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
         p3.wait_for_timeout(900)
-        p3.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        p3.click("[data-testid=job-fetch]")
-        p3.wait_for_selector("[data-testid=job-preview]", timeout=20000)
-        check("nokey url fetch works", "노바커머스" in p3.inner_text("[data-testid=job-preview-company]"))
-        p3.fill("[data-testid=target-salary]", "5200")
-        p3.click("[data-testid=generate]")
-        p3.wait_for_selector("[data-testid=result]", timeout=30000)
+        p3.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654")
+        p3.click("[data-testid=hub-fetch]")
+        p3.wait_for_selector("[data-testid=hub-detail]", timeout=30000)
         p3.wait_for_timeout(1200)
-        check("nokey rule engine", "규칙 엔진" in p3.inner_text("[data-testid=package-engine]"))
-        check("nokey rule intro", "규칙 생성" in p3.inner_text("[data-testid=intro-source]"))
-        length_text = p3.inner_text("[data-testid=intro-length]")
-        chars = int("".join(ch for ch in length_text.split("자")[0] if ch.isdigit()) or 0)
-        check("rule intro 250-320", 250 <= chars <= 320, length_text)
-        pkg = packages(p3)[0]
-        check("nokey questions have script", all(q.get("answer") for q in pkg["questions"][:5]))
-        check("nokey negotiation target", "5,200" in ((pkg.get("negotiation") or {}).get("opener") or ""), str((pkg.get("negotiation") or {}).get("opener"))[:100])
-        first_opener = pkg["negotiation"]["opener"]
-        first_reverse = pkg["reverse"][0]["question"]
-        first_intro = pkg["intro"]["text"]
-        # 우선순위를 바꾸면 협상·역질문·자기소개 마무리가 달라져야 합니다
-        p3.click("[data-testid=new-job]")
-        p3.wait_for_timeout(500)
-        p3.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        p3.click("[data-testid=job-fetch]")
-        p3.wait_for_selector("[data-testid=job-preview]", timeout=20000)
-        p3.click("[data-testid=priority-growth]")
-        p3.wait_for_timeout(300)
-        p3.click("[data-testid=generate]")
-        p3.wait_for_selector("[data-testid=result]", timeout=30000)
-        p3.wait_for_timeout(1200)
-        second = packages(p3)[0]
-        check("priority changes opener", second["negotiation"]["opener"] != first_opener, f"{first_opener[:40]} / {second['negotiation']['opener'][:40]}")
-        check("priority changes reverse", second["reverse"][0]["question"] != first_reverse, second["reverse"][0]["question"][:60])
-        check("priority changes intro close", second["intro"]["text"] != first_intro)
-        check("priority growth wording", "역할" in second["negotiation"]["opener"] or "권한" in second["reverse"][0]["question"], second["negotiation"]["opener"][:60])
-        p3.fill("[data-testid=drill-text-0]", "당시 프로젝트에서 제가 직접 캠페인을 기획해 참여율을 12%에서 18%로 올렸습니다.")
-        p3.click("[data-testid=drill-submit-0]")
-        p3.wait_for_selector("[data-testid=drill-feedback-0]", timeout=20000)
-        check("nokey rule feedback", "규칙 피드백" in p3.inner_text("[data-testid=drill-feedback-0]"))
+        check("nokey job added", p3.locator("[data-testid=hub-job]").count() == 1)
+        check("nokey rule draft", wait_text(p3, "[data-testid=draft-source]", "규칙 초안", 10000), p3.inner_text("[data-testid=draft-source]"))
+        check("nokey no AI draft request", p3.locator("[data-testid=draft-busy]").count() == 0)
+        cover = p3.inner_text("[data-testid=apply-cover]")
+        check("nokey cover grounded", "보도자료" in cover or "루멘스튜디오" in cover, cover[:120])
+        check("nokey apply link", p3.locator("[data-testid=apply-link]").get_attribute("href") == "https://www.jobkorea.co.kr/Recruit/Apply/987654")
+        draft = hub_jobs(p3)[0].get("draft") or {}
+        check("nokey draft saved rule", draft.get("source") == "rule", str(draft.get("source")))
+        check("nokey no invented numbers", "999억" not in p3.inner_text("body") and "777억" not in p3.inner_text("body"))
         ctx3.close()
+        pb.close()
+        stop_port(4385)
 
     step("no-key mode", nokey_mode)
 
     # ────────────────────────── 서버 없음 (정적 호스팅) ──────────────────────────
     def offline_mode():
-        ctx4 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        start_server("offline", 4384)
+        pb = p.chromium.launch()
+        ctx4 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         p4 = ctx4.new_page()
         attach(p4, "offline")
         p4.goto(OFFLINE, wait_until="domcontentloaded")
         p4.wait_for_timeout(1200)
-        p4.click("[data-testid=nav-studio]")
-        p4.wait_for_timeout(200)
         check("offline banner local", wait_attr(p4, "[data-testid=mode-banner]", "data-mode", "local"))
         p4.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
         p4.wait_for_timeout(900)
-        p4.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        p4.click("[data-testid=job-fetch]")
-        p4.wait_for_selector("[data-testid=job-fetch-error]", timeout=20000)
-        check("offline url fetch explains", "서버" in p4.inner_text("[data-testid=job-fetch-error]"), p4.inner_text("[data-testid=job-fetch-error]")[:140])
-        check("offline paste panel opens", p4.locator("[data-testid=job-paste]").count() == 1)
-        with open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8") as handle:
-            p4.fill("[data-testid=job-paste]", handle.read())
-        p4.click("[data-testid=job-paste-analyze]")
-        p4.wait_for_selector("[data-testid=job-preview]", timeout=15000)
-        p4.click("[data-testid=generate]")
-        p4.wait_for_selector("[data-testid=result]", timeout=30000)
+        p4.fill("[data-testid=hub-urls]", "https://www.wanted.co.kr/wd/123456")
+        p4.click("[data-testid=hub-fetch]")
+        p4.wait_for_selector("[data-testid=hub-paste-panel]", timeout=30000)
+        check("offline fetch explains", wait_text(p4, "[data-testid=hub-progress]", "서버", 15000), p4.inner_text("[data-testid=hub-progress]")[:140])
+        p4.fill("[data-testid=hub-paste-url]", "https://www.wanted.co.kr/wd/123456")
+        p4.fill("[data-testid=hub-paste-text]", open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8").read())
+        p4.click("[data-testid=hub-paste-add]")
         p4.wait_for_timeout(1000)
-        check("offline works with rule engine", "규칙 엔진" in p4.inner_text("[data-testid=package-engine]"))
-        check("offline tracker auto entry", len(tracker(p4)) == 1)
+        check("offline paste works", p4.locator("[data-testid=hub-job]").count() == 1, str(p4.locator("[data-testid=hub-job]").count()))
+        check("offline rule draft", wait_text(p4, "[data-testid=draft-source]", "규칙 초안", 10000), p4.inner_text("[data-testid=draft-source]"))
+        check("offline apply link", p4.locator("[data-testid=apply-link]").get_attribute("href") == "https://www.wanted.co.kr/wd/123456", str(p4.locator("[data-testid=apply-link]").count()))
         ctx4.close()
+        pb.close()
+        stop_port(4384)
 
     step("offline hosting", offline_mode)
 
     # ────────────────────────── Gemini 서버 키 모드 ──────────────────────────
     def gemini_mode():
-        ctx6 = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        start_server("gemini", 4386)
+        pb = p.chromium.launch()
+        ctx6 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         p6 = ctx6.new_page()
         attach(p6, "gemini")
         p6.goto(GEMINI, wait_until="domcontentloaded")
         p6.wait_for_timeout(1200)
-        p6.click("[data-testid=nav-studio]")
-        p6.wait_for_timeout(200)
         check("gemini banner live", wait_attr(p6, "[data-testid=mode-banner]", "data-mode", "live"))
         check("gemini banner model", "gemini-3.5-flash-lite" in p6.inner_text("[data-testid=mode-banner]"))
         p6.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
         p6.wait_for_timeout(900)
-        p6.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        p6.click("[data-testid=job-fetch]")
-        p6.wait_for_selector("[data-testid=job-preview]", timeout=25000)
-        p6.click("[data-testid=generate]")
-        p6.wait_for_selector("[data-testid=result]", timeout=40000)
+        p6.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654")
+        p6.click("[data-testid=hub-fetch]")
+        p6.wait_for_selector("[data-testid=hub-detail]", timeout=30000)
+        check("gemini draft AI", wait_text(p6, "[data-testid=draft-source]", "AI 초안", 25000), p6.inner_text("[data-testid=draft-source]"))
+        p6.click("[data-testid=deep-open]")
+        p6.wait_for_selector("[data-testid=result]", timeout=60000)
         p6.wait_for_timeout(2000)
-        check("gemini package AI", "AI 분석" in p6.inner_text("[data-testid=package-engine]"))
-        check("gemini intro AI", "AI 생성" in p6.inner_text("[data-testid=intro-source]"))
+        check("gemini deep AI", "AI 분석" in p6.inner_text("[data-testid=package-engine]"))
+        check("gemini deep intro AI", "AI 생성" in p6.inner_text("[data-testid=intro-source]"))
         ctx6.close()
+        pb.close()
+        stop_port(4386)
 
     step("gemini mode", gemini_mode)
 
     # ────────────────────────── 모바일 390px ──────────────────────────
     def mobile():
-        mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
+        start_server("ai", 4383)
+        pb = p.chromium.launch()
+        mctx = pb.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
         mp = mctx.new_page()
         attach(mp, "mobile")
         mp.goto(AI, wait_until="domcontentloaded")
         mp.wait_for_timeout(1200)
-        mp.click("[data-testid=nav-studio]")
-        mp.wait_for_timeout(200)
-        check("mobile no overflow (setup)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
-        check("mobile resume CTA visible", mp.locator("[data-testid=resume-file-btn]").count() == 1)
-        check("mobile url input", mp.locator("[data-testid=job-url]").count() == 1)
+        check("mobile no overflow (hub)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
+        check("mobile url textarea", mp.locator("[data-testid=hub-urls]").count() == 1)
         mp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
         mp.wait_for_timeout(1000)
-        check("mobile no overflow (resume)", no_overflow(mp))
-        mp.fill("[data-testid=job-url]", "https://www.wanted.co.kr/wd/123456")
-        mp.click("[data-testid=job-fetch]")
-        mp.wait_for_selector("[data-testid=job-preview]", timeout=25000)
-        mp.wait_for_timeout(500)
-        check("mobile no overflow (job)", no_overflow(mp))
-        mp.click("[data-testid=generate]")
-        mp.wait_for_selector("[data-testid=result]", timeout=40000)
-        mp.wait_for_timeout(2000)
-        check("mobile no overflow (result)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
-        check("mobile section fit", mp.locator("[data-testid=section-fit]").count() == 1)
-        mp.locator("[data-testid=drill-1] button").first.click()
-        mp.wait_for_timeout(300)
-        mp.click("[data-testid=drill-start-1]")
-        mp.wait_for_timeout(600)
-        check("mobile no overflow (drill)", no_overflow(mp))
+        mp.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654")
+        mp.click("[data-testid=hub-fetch]")
+        mp.wait_for_selector("[data-testid=hub-detail]", timeout=30000)
+        mp.wait_for_timeout(1200)
+        check("mobile no overflow (detail)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
+        check("mobile requirements", mp.locator("[data-testid=req-documents]").count() == 1)
+        check("mobile apply link", mp.locator("[data-testid=apply-link]").count() == 1)
+        mp.click("[data-testid=status-1]")
+        mp.wait_for_timeout(400)
+        check("mobile no overflow (status)", no_overflow(mp))
         mp.click("[data-testid=nav-tracker]")
         mp.wait_for_timeout(900)
-        check("mobile tracker view", mp.locator("[data-testid=tracker-row]").count() >= 1)
-        check("mobile no overflow (tracker)", no_overflow(mp))
+        check("mobile tracker cards", mp.locator("[data-testid=tracker-card]").count() >= 1)
+        check("mobile no overflow (tracker)", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
         mctx.close()
+        pb.close()
+        stop_port(4383)
 
     step("mobile 390px", mobile)
-
-    # ────────────────────────── 공고 보드 ──────────────────────────
-    def board_flow():
-        bctx = browser.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
-        bp = bctx.new_page()
-        attach(bp, "board")
-        bp.goto(AI, wait_until="domcontentloaded")
-        bp.wait_for_timeout(900)
-        check("board is default view", bp.locator("[data-testid=board-view]").count() == 1)
-        check("board empty message", bp.locator("[data-testid=board-empty]").count() == 1)
-        # 이력서 없이 수집하면 막힙니다
-        bp.fill("[data-testid=board-urls]", "https://www.wanted.co.kr/wd/100001")
-        bp.click("[data-testid=board-collect]")
-        bp.wait_for_timeout(500)
-        check("board needs resume first", bp.locator("[data-testid=board-item]").count() == 0)
-        bp.locator("button[aria-label=닫기]").first.click()
-        bp.wait_for_timeout(200)
-        bp.click("[data-testid=nav-studio]")
-        bp.wait_for_timeout(200)
-        bp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
-        bp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
-        bp.click("[data-testid=nav-board]")
-        bp.wait_for_timeout(300)
-        bp.fill("[data-testid=board-urls]", "https://www.wanted.co.kr/wd/100001\nhttps://www.wanted.co.kr/wd/100002?utm_source=x\nhttps://www.wanted.co.kr/wd/100001?utm_source=y\nhttps://blocked-careers.example/jobs/1")
-        bp.click("[data-testid=board-collect]")
-        bp.wait_for_selector("[data-testid=board-item]", timeout=40000)
-        bp.wait_for_timeout(1500)
-        check("board added 2 (tracking-param dup removed)", bp.locator("[data-testid=board-item]").count() == 2, str(bp.locator("[data-testid=board-item]").count()))
-        check("board shows failure with paste fallback", bp.locator("[data-testid=board-failures]").count() == 1 and "자동 수집을 막았습니다" in bp.inner_text("[data-testid=board-failures]"))
-        scores = [int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts()]
-        check("board scores computed 0-100", len(scores) == 2 and all(0 <= v <= 100 for v in scores), str(scores))
-        with open(os.path.join(FIXTURES, "my-job.txt"), encoding="utf-8") as handle:
-            job_text = handle.read()
-        bp.locator("[data-testid=board-failures] textarea").first.fill(job_text)
-        bp.get_by_role("button", name="본문으로 추가").click()
-        bp.wait_for_timeout(400)
-        check("board paste rescue adds posting", bp.locator("[data-testid=board-item]").count() == 3)
-        bp.click("[data-testid=collect-tab-text]")
-        bp.fill("[data-testid=board-bulk]", job_text + "\n===\n" + job_text.replace("노바커머스", "다온스토어"))
-        bp.click("[data-testid=board-bulk-add]")
-        bp.wait_for_timeout(400)
-        check("board bulk text adds 2", bp.locator("[data-testid=board-item]").count() == 5, str(bp.locator("[data-testid=board-item]").count()))
-        bp.click("[data-testid=collect-tab-search]")
-        check("board search tab has collector bookmarklet", bp.locator("[data-testid=bookmarklet]").get_attribute("href").startswith("javascript:"))
-        # 필터·정렬
-        top = int(bp.locator("[data-testid=item-score]").first.inner_text())
-        check("board sorted by fit desc", top == max(int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts()))
-        all_scores = sorted(int(t) for t in bp.locator("[data-testid=item-score]").all_inner_texts())
-        threshold = min(100, ((all_scores[-1] // 5) * 5) + (5 if all_scores[-1] % 5 else 0)) if all_scores[0] == all_scores[-1] else min(100, (all_scores[0] // 5 + 1) * 5)
-        bp.locator("[data-testid=min-score]").evaluate("(el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }", threshold)
-        bp.wait_for_timeout(200)
-        check("board min-score filter hides low fits", bp.locator("[data-testid=board-item]").count() < 5, str(all_scores))
-        bp.locator("[data-testid=min-score]").evaluate("(el) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 0); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }")
-        # 지원 큐
-        bp.click("[data-testid=queue-top]")
-        bp.wait_for_selector("[data-testid=apply-queue]")
-        check("queue shows tailored summary", len(bp.inner_text("[data-testid=queue-summary]")) > 40)
-        has_link = bp.locator("[data-testid=queue-open]").count() == 1
-        if has_link:
-            check("queue done locked until apply page opened", bp.locator("[data-testid=queue-done]").is_disabled())
-            with bp.context.expect_page() as popup:
-                bp.click("[data-testid=queue-open]")
-            popup.value.close()
-            bp.wait_for_timeout(200)
-        before = len(tracker(bp))
-        bp.click("[data-testid=queue-done]")
-        bp.wait_for_timeout(300)
-        check("queue done records tracker entry", len(tracker(bp)) == before + 1, str(len(tracker(bp))))
-        bp.click("[data-testid=queue-skip]")
-        bp.wait_for_timeout(200)
-        statuses = bp.evaluate("JSON.parse(localStorage.getItem('jobfit.board.v1')||'[]').map(p=>p.status)")
-        check("queue updates statuses", "applied" in statuses and "skip" in statuses, str(statuses))
-        bp.keyboard.press("Escape")
-        if bp.locator("[data-testid=apply-queue]").count():
-            bp.locator("[data-testid=apply-queue] button[aria-label=닫기]").click()
-        bp.click("[data-testid=filter-applied]")
-        check("status filter applied", bp.locator("[data-testid=board-item]").count() == 1)
-        bp.click("[data-testid=filter-all]")
-        # 저장
-        bp.reload(wait_until="domcontentloaded")
-        bp.wait_for_timeout(900)
-        check("board persisted after reload", bp.locator("[data-testid=board-item]").count() == 5)
-        # 상세 코칭 연결
-        bp.locator("[data-testid=item-coach]").first.click()
-        bp.wait_for_timeout(500)
-        check("coach opens studio with job loaded", bp.locator("[data-testid=job-preview]").count() == 1)
-        bp.click("[data-testid=nav-board]")
-        # 모바일
-        bp.set_viewport_size({"width": 390, "height": 844})
-        bp.wait_for_timeout(300)
-        check("board mobile no overflow", no_overflow(bp), str(bp.evaluate("document.documentElement.scrollWidth")))
-        bctx.close()
-
-    step("job board", board_flow)
-
-    browser.close()
 
 # ─────────────────────────────── 개인정보 0건 ───────────────────────────────
 print("── 개인정보 검사", flush=True)

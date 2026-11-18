@@ -229,6 +229,54 @@ export async function requestAiEvaluation(input: EvalRequestInput): Promise<{ mo
   return post<AiEvalData>(body, 60000);
 }
 
+export interface ApplyKitRequestInput {
+  job: JobPosting;
+  resume: MasterResume;
+  config: AiConfig;
+}
+
+export interface AiApplyKitData {
+  oneLiner?: string;
+  coverLetter?: string;
+  keyPoints?: string[];
+}
+
+/** 저장된 이력서와 공고로 한 줄 어필·지원서 본문 초안을 받습니다. */
+export async function requestAiApplyKit(input: ApplyKitRequestInput): Promise<{ model?: string; data: AiApplyKitData }> {
+  const { job, resume, config } = input;
+  const body = {
+    mode: "apply_kit" as const,
+    apiKey: keyOf(config),
+    model: config.model || undefined,
+    job: {
+      company: job.company,
+      role: job.role,
+      employmentType: job.employmentType,
+      location: job.location,
+      responsibilities: job.responsibilities,
+      requirements: job.requirements,
+      preferred: job.preferred,
+      documents: job.documents ?? "",
+      tone: job.tone,
+    },
+    resume: {
+      name: resume.name,
+      headline: resume.headline,
+      years: resume.years,
+      summary: resume.summary,
+      skills: resume.skills,
+      industries: resume.industries,
+      experiences: resume.experiences.map((exp) => ({
+        company: exp.company,
+        role: exp.role,
+        period: exp.period,
+        bullets: exp.bullets.map((bullet) => bullet.text).filter((text) => text.trim().length > 3),
+      })),
+    },
+  };
+  return post<AiApplyKitData>(body, 60000);
+}
+
 export interface RecommendRequestInput {
   resume: MasterResume;
   config: AiConfig;

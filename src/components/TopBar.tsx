@@ -1,12 +1,11 @@
-import { CircleHelp, ClipboardList, History, LayoutList, PlugZap, Sparkles, SquarePen } from "lucide-react";
+import { CircleHelp, ClipboardList, History, Layers, PlugZap, Sparkles } from "lucide-react";
 import type { AiStatus, ViewId } from "../types";
 import { cx } from "./ui";
 
-const NAV: { id: ViewId; label: string; icon: typeof SquarePen }[] = [
-  { id: "board", label: "공고 보드", icon: LayoutList },
-  { id: "studio", label: "상세 코칭", icon: SquarePen },
+const NAV: { id: ViewId; label: string; icon: typeof Layers }[] = [
+  { id: "studio", label: "공고 허브", icon: Layers },
   { id: "tracker", label: "지원 현황", icon: ClipboardList },
-  { id: "history", label: "히스토리", icon: History },
+  { id: "history", label: "심층 기록", icon: History },
 ];
 
 export function TopBar({
@@ -15,32 +14,35 @@ export function TopBar({
   aiStatus,
   onOpenAi,
   onOpenHelp,
-  hasPackage,
+  hubCount,
+  appliedCount,
 }: {
   view: ViewId;
   onChangeView: (view: ViewId) => void;
   aiStatus: AiStatus;
   onOpenAi: () => void;
   onOpenHelp: () => void;
-  hasPackage: boolean;
+  hubCount: number;
+  appliedCount: number;
 }) {
   const live = aiStatus.kind === "live";
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-surface/92 backdrop-blur-md">
       <div className="mx-auto flex h-[52px] w-full max-w-[1180px] items-center gap-2 px-3 sm:px-5">
-        <button type="button" onClick={() => onChangeView("board")} className="flex items-center gap-1.5" aria-label="JobFit Studio 홈">
+        <button type="button" onClick={() => onChangeView("studio")} className="flex items-center gap-1.5" aria-label="JobFit Studio 홈">
           <span className="grid h-7 w-7 place-items-center rounded-lg bg-ink text-white">
             <Sparkles size={14} />
           </span>
           <span className="hidden flex-col leading-none sm:flex">
             <span className="text-[12.5px] font-semibold tracking-[-0.02em] text-ink">JobFit Studio</span>
-            <span className="mt-0.5 text-[9px] text-faint">이력서 한 번 · 공고 여러 개 한 페이지</span>
+            <span className="mt-0.5 text-[9px] text-faint">공고 여러 개 · 지원은 한 곳에서</span>
           </span>
         </button>
 
         <nav className="ml-2 flex items-center gap-0.5 overflow-x-auto" aria-label="화면 이동">
           {NAV.map((item) => {
             const active = view === item.id;
+            const count = item.id === "studio" ? hubCount : item.id === "tracker" ? appliedCount : 0;
             return (
               <button
                 key={item.id}
@@ -54,7 +56,16 @@ export function TopBar({
               >
                 <item.icon size={12} />
                 {item.label}
-                {item.id === "tracker" && hasPackage && !active && <span className="h-1 w-1 rounded-full bg-accent" />}
+                {count > 0 && (
+                  <span
+                    className={cx(
+                      "num rounded-full px-1.5 py-0.5 text-[9px] font-semibold leading-none",
+                      active ? "bg-white/15 text-white" : "bg-paper-deep text-muted",
+                    )}
+                  >
+                    {count}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -67,7 +78,7 @@ export function TopBar({
             title={aiStatus.message}
             className={cx(
               "chip hidden text-[9.5px] sm:inline-flex",
-              live ? "bg-accent-soft text-accent-deep" : aiStatus.kind === "checking" ? "bg-paper-deep text-muted" : "bg-paper-deep text-muted",
+              live ? "bg-accent-soft text-accent-deep" : "bg-paper-deep text-muted",
             )}
           >
             <span className={cx("h-1.5 w-1.5 rounded-full", live ? "bg-accent" : "bg-faint")} />

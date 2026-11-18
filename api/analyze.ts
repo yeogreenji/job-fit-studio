@@ -31,8 +31,8 @@ interface ApiResponse {
 }
 
 const SERVICE = "jobfit-analyze";
-const VERSION = "1.2.0";
-const MODES = ["package", "interview_eval", "job_url", "recommend"] as const;
+const VERSION = "1.3.0";
+const MODES = ["package", "interview_eval", "job_url", "recommend", "apply_kit"] as const;
 type Mode = (typeof MODES)[number];
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
@@ -117,6 +117,7 @@ interface NormalizedJob {
   responsibilities: string;
   requirements: string;
   preferred: string;
+  documents: string;
   tone: string;
 }
 
@@ -141,6 +142,7 @@ const normalizeJob = (value: unknown): NormalizedJob | null => {
     responsibilities: str(job.responsibilities),
     requirements: str(job.requirements),
     preferred: str(job.preferred),
+    documents: str(job.documents),
     tone: str(job.tone),
   };
   if (!normalized.responsibilities && !normalized.requirements) return null;
@@ -254,10 +256,11 @@ const JOB_EXTRACT_SYSTEM = `[JOBFIT_JOBURL] 당신은 채용 공고 페이지의
 규칙:
 1. 주어진 본문에 실제로 적힌 내용만 옮깁니다. 본문에 없는 회사명·직무·연봉·복지·수치를 만들지 않습니다.
 2. 회사명은 채용 주체(회사)입니다. 사이트 이름(예: 채용 플랫폼 이름)을 회사명으로 쓰지 않습니다.
-3. 담당 업무·자격 요건·우대 사항은 원문 문장을 줄 단위로 옮깁니다(각 12줄, 1,800자 이내). 요약해서 새 문장을 만들지 않아도 됩니다.
-4. 조직 문화/복지 섹션이 있으면 tone에 옮기고, 없으면 빈 문자열로 둡니다.
-5. 찾을 수 없는 항목은 빈 문자열("")로 둡니다. 추측해서 채우지 않습니다.
-6. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장이나 코드블록 표시를 붙이지 않습니다.
+3. 담당 업무·자격 요건·우대 사항을 원문 문장 그대로 줄 단위로 옮깁니다(각 12줄, 1,800자 이내). 요약해서 새 문장을 만들지 않아도 됩니다.
+4. 제출서류·필수 제출 항목이 있으면 documents에 옮기고, 없으면 빈 문자열로 둡니다.
+5. 조직 문화/복지 섹션이 있으면 tone에 옮기고, 없으면 빈 문자열로 둡니다.
+6. 찾을 수 없는 항목은 빈 문자열("")로 둡니다. 추측해서 채우지 않습니다.
+7. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장이나 코드블록 표시를 붙이지 않습니다.
 
 {
   "company": "",
@@ -268,6 +271,7 @@ const JOB_EXTRACT_SYSTEM = `[JOBFIT_JOBURL] 당신은 채용 공고 페이지의
   "responsibilities": "",
   "requirements": "",
   "preferred": "",
+  "documents": "",
   "tone": "",
   "note": "공고에서 확인하지 못한 항목이 있으면 한 문장"
 }`;
@@ -282,6 +286,46 @@ const RECOMMEND_SYSTEM = `[JOBFIT_RECOMMEND] 당신은 한국 경력직 이직�
 5. 반드시 아래 JSON 객체 하나만 출력합니다.
 
 {"titles": [{"title": "", "why": ""}], "salaryBand": {"min": 0, "max": 0, "basis": ""}, "targets": [{"group": "", "why": ""}]}`;
+
+const APPLY_SYSTEM = `[JOBFIT_APPLY] 당신은 한국 기업 지원서를 대신 쓰는 커리어 코치입니다. 지원자가 공고에 바로 붙여넣을 지원 문구를 만듭니다.
+규칙:
+1. [지원자 경력 문장]에 있는 사실만 씁니다. 없는 경험·프로젝트·회사·브랜드를 만들지 않습니다.
+2. 숫자는 지원자 원문에 적힌 값만 그대로 씁니다. 새로 계산·추정하지 않습니다.
+3. oneLiner는 40~70자의 한 줄 어필입니다. 공고의 직무·요구와 지원자 경력의 접점을 한 문장으로 씁니다. 인사말로 시작하지 않습니다.
+4. coverLetter는 3문단 500~800자입니다. 1문단은 공고의 담당 업무 중 지원자가 실제로 해 온 일과 연결한 지원 동기, 2문단은 이력서 문장을 근거로 한 강점(문장 1~2개를 그대로 인용해도 됩니다), 3문단은 입사 후 기여와 마무리입니다. ‘안녕하세요’ 인사말과 서명은 쓰지 말고 본문만 씁니다.
+5. keyPoints는 이력서 경력 문장 중 이 공고에 가장 잘 맞는 문장 3개를 원문 그대로 옮깁니다. 한 글자도 바꾸지 않습니다.
+6. 공고의 자격 요건을 지원자가 충족했다고 단정하지 않습니다. 근거가 되는 경험만 연결합니다.
+7. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장이나 코드블록 표시를 붙이지 않습니다.
+
+{"oneLiner": "", "coverLetter": "", "keyPoints": [""]}`;
+
+function buildApplyPrompt(job: NormalizedJob, resume: NormalizedResume): string {
+  const experiences = resume.experiences
+    .map((exp) => `[${exp.company} · ${exp.role} · ${exp.period}]\n${exp.bullets.map((bullet) => `- ${bullet}`).join("\n")}`)
+    .join("\n\n");
+  return `[지원자]
+이름: ${resume.name || "(미입력)"} · 한 줄 소개: ${resume.headline || "(미입력)"} · 경력 ${resume.years}년
+요약: ${resume.summary || "(미입력)"}
+스킬: ${resume.skills.join(", ") || "(미입력)"}
+산업: ${resume.industries.join(", ") || "(미입력)"}
+
+[지원자 경력 문장 — 이 문장들의 사실만 사용]
+${experiences || "(경력 문장 없음)"}
+
+[지원 공고]
+회사: ${job.company || "(미입력)"}
+직무: ${job.role || "(미입력)"}
+담당 업무:
+${job.responsibilities || "(미입력)"}
+자격 요건:
+${job.requirements || "(미입력)"}
+우대 사항:
+${job.preferred || "(미입력)"}
+제출서류:
+${job.documents || "(미입력)"}
+
+위 지원자가 이 공고에 바로 붙여넣을 한 줄 어필·지원서 본문 초안·강조 경력 문장을 JSON으로 만드세요. 원문에 없는 경험과 수치는 절대 쓰지 마세요.`;
+}
 
 function numbersIn(text: string): Set<string> {
   return new Set((text.match(/\d[\d,.]*/g) ?? []).map((token) => token.replace(/[,]/g, "").replace(/\.$/, "")));
@@ -580,6 +624,8 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     }
 
     let job: ExtractedJob = structureFromPage(page);
+    if (!job.applyUrl) job.applyUrl = page.finalUrl;
+    if (!job.applyLabel) job.applyLabel = "원문 공고";
     let engine: "rule" | "ai" = "rule";
     let model: string | undefined;
     let note = "";
@@ -624,7 +670,12 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
       engine,
       provider,
       model,
-      job,
+      job: {
+        ...job,
+        applyUrl: job.applyUrl || page.finalUrl,
+        applyLabel: job.applyLabel || "원문 공고",
+        documents: job.documents || "",
+      },
       meta: {
         url: page.url,
         finalUrl: page.finalUrl,
@@ -661,6 +712,34 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         system: PACKAGE_SYSTEM,
         user: buildPackagePrompt(body, job, resume),
         maxTokens: 2_400,
+      });
+      const data = parseJsonContent(completion.content);
+      if (!data) {
+        fail(res, 502, "bad_json", "AI 응답을 JSON으로 읽지 못했습니다.");
+        return;
+      }
+      send(res, 200, { ok: true, mode, provider, model: completion.model, data });
+      return;
+    }
+
+    if (mode === "apply_kit") {
+      const job = normalizeJob(body.job);
+      const resume = normalizeResume(body.resume);
+      if (!job) {
+        fail(res, 400, "bad_job", "공고의 담당 업무나 자격 요건이 필요합니다.");
+        return;
+      }
+      if (!resume) {
+        fail(res, 400, "bad_resume", "경력 문장이 한 개 이상 필요합니다.");
+        return;
+      }
+      const completion = await callCompletion({
+        provider,
+        apiKey,
+        model: useModel,
+        system: APPLY_SYSTEM,
+        user: buildApplyPrompt(job, resume),
+        maxTokens: 1_500,
       });
       const data = parseJsonContent(completion.content);
       if (!data) {
@@ -744,7 +823,11 @@ function mergeExtracted(heuristic: ExtractedJob, data: Record<string, unknown>, 
     responsibilities: pick("responsibilities", 2_000),
     requirements: pick("requirements", 2_000),
     preferred: pick("preferred", 2_000),
+    documents: pick("documents", 1_200),
     tone: pick("tone", 1_200),
+    // 지원 링크는 페이지 HTML에서 직접 읽은 값만 씁니다(AI가 만든 링크는 받지 않습니다).
+    applyUrl: heuristic.applyUrl,
+    applyLabel: heuristic.applyLabel,
   };
 }
 
@@ -760,6 +843,7 @@ function normalizeJobLoose(value: unknown): NormalizedJob | null {
     responsibilities: str(job.responsibilities),
     requirements: str(job.requirements),
     preferred: str(job.preferred, 1_500),
+    documents: str(job.documents, 1_500),
     tone: str(job.tone, 800),
   };
 }

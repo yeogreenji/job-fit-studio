@@ -35,6 +35,12 @@ export interface JobPosting {
   responsibilities: string;
   requirements: string;
   preferred: string;
+  /** 제출서류·필수 제출 항목 (공고 원문에 있을 때만) */
+  documents?: string;
+  /** 원문 공고의 직접 지원 링크 */
+  applyUrl?: string;
+  /** 원문 지원 버튼 문구 (예: 지원하기) */
+  applyLabel?: string;
   tone: string;
 }
 
@@ -356,4 +362,40 @@ export interface ApplicationEntry {
 }
 
 export type TabId = "match" | "rewrite" | "interview" | "pitch" | "export";
-export type ViewId = "board" | "studio" | "history" | "tracker";
+export type ViewId = "studio" | "history" | "tracker";
+
+/* ── 공고 수집·직접 지원 허브 ── */
+
+/** 지원 상태 — 허브 카드에서 바로 바꿉니다. */
+export type ApplyStatus = "지원 전" | "준비중" | "지원완료" | "서류합격" | "면접";
+
+/** 저장된 이력서로 만든 복붙용 지원 문구 묶음 */
+export interface ApplyDraft {
+  /** 한 줄 어필 */
+  oneLiner: string;
+  /** 지원서·자소서에 붙일 본문 초안 (3문단) */
+  coverLetter: string;
+  /** 이력서에서 그대로 인용한 강조 문장 */
+  keyPoints: string[];
+  source: EngineKind;
+  model?: string;
+  updatedAt: string;
+  /** 근거 확인에서 제외한 항목 수 */
+  warnings?: number;
+}
+
+/** 허브에 모은 공고 한 건 — 공고 원문 + 지원 상태 + 메모 + 지원 문구 */
+export interface HubJob {
+  id: string;
+  job: JobPosting;
+  source: JobSource;
+  /** 원문 직접 지원 링크 (없으면 공고 URL) */
+  applyUrl: string;
+  status: ApplyStatus;
+  memo: string;
+  /** 제출서류 체크한 항목 */
+  documentsChecked: string[];
+  draft?: ApplyDraft;
+  createdAt: string;
+  updatedAt: string;
+}
