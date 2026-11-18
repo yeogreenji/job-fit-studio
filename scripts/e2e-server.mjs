@@ -279,6 +279,7 @@ function payloadFor(system, user) {
 
 async function boot() {
   let handler = null;
+  let jobsHandler = null;
   if (mode !== "offline") {
     const outfile = path.join(here, ".build", "analyze.mjs");
     await build({
@@ -290,15 +291,25 @@ async function boot() {
       outfile,
       logLevel: "silent",
     });
+    const jobsOut = path.join(here, ".build", "jobs.mjs");
+    await build({
+      entryPoints: [path.join(root, "api/jobs.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node20",
+      outfile: jobsOut,
+      logLevel: "silent",
+    });
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
       const target = String(url);
       if (target.includes(":generateContent")) return geminiResponse(url, init);
-      // 공고 URL 수집 테스트용 가짜 사이트
-      if (target.includes("wanted.co.kr")) {
+      // 공고 URL 수집 테스트용 가짜 사이트 (자동 수집 API 호출은 그대로 실제 사이트로 보냅니다)
+      if (/wanted\.co\.kr\/wd\//.test(target)) {
         return new Response(jobPage, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
       }
-      if (target.includes("jobkorea.co.kr")) {
+      if (/jobkorea\.co\.kr\/Recruit\/GI_Read\/987654/.test(target)) {
         return new Response(jobPage2, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
       }
       if (target.includes("blocked-careers.example")) {
@@ -326,6 +337,7 @@ async function boot() {
     delete process.env.GEMINI_MODEL;
     process.env.JOBFIT_ALLOW_LOCAL_FETCH = mode === "strict" ? "" : "1";
     handler = (await import(`${outfile}?ts=${Date.now()}`)).default;
+    jobsHandler = (await import(`${jobsOut}?ts=${Date.now()}`)).default;
   }
 
   const server = http.createServer(async (req, res) => {
@@ -338,6 +350,16 @@ async function boot() {
         return;
       }
       await handler(req, res);
+      return;
+    }
+    if (url.pathname === "/api/jobs") {
+      if (!jobsHandler) {
+        res.statusCode = 404;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ ok: false, error: { code: "server_unavailable", message: "공고 수집 서버 없음" } }));
+        return;
+      }
+      await jobsHandler(req, res);
       return;
     }
     let filePath = path.join(dist, decodeURIComponent(url.pathname));

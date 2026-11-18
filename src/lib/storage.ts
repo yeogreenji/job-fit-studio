@@ -1,5 +1,6 @@
 import type { AiConfig, ApplicationEntry, ApplyStatus, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
 import { EMPTY_RESUME } from "./presets";
+import { isTrackedJob } from "./collect";
 
 const RESUME_KEY = "jobfit.resume.v1";
 const PACKAGES_KEY = "jobfit.packages.v1";
@@ -8,7 +9,7 @@ const LEGACY_API_KEY = "jobfit.api.v1";
 const TRACKER_KEY = "jobfit.tracker.v1";
 const HUB_KEY = "jobfit.hub.jobs.v1";
 const MAX_PACKAGES = 20;
-const MAX_HUB_JOBS = 40;
+const MAX_HUB_JOBS = 60;
 
 export const STAGES: Stage[] = ["준비중", "서류", "1차", "2차", "최종", "오퍼"];
 
@@ -287,6 +288,7 @@ export function loadHubJobs(): HubJob[] {
         applyUrl: item.applyUrl || item.job.applyUrl || item.source?.url || "",
         status: APPLY_STATUS_VALUES.includes(item.status) ? item.status : "지원 전",
         memo: typeof item.memo === "string" ? item.memo : "",
+        saved: Boolean(item.saved),
         documentsChecked: Array.isArray(item.documentsChecked) ? item.documentsChecked.filter((value) => typeof value === "string") : [],
         job: {
           ...item.job,
@@ -302,7 +304,9 @@ export function loadHubJobs(): HubJob[] {
 
 export function persistHubJobs(jobs: HubJob[]) {
   try {
-    localStorage.setItem(HUB_KEY, JSON.stringify(jobs.slice(0, MAX_HUB_JOBS)));
+    // 자동 수집으로 채운 공고는 화면에만 두고, 사용자가 담거나 상태·메모를 남긴 것만 저장합니다.
+    const keep = jobs.filter((item) => item.source?.kind !== "auto" || isTrackedJob(item)).slice(0, MAX_HUB_JOBS);
+    localStorage.setItem(HUB_KEY, JSON.stringify(keep));
   } catch {
     /* 저장 공간이 없으면 조용히 넘어갑니다 */
   }

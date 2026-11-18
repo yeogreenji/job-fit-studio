@@ -723,10 +723,11 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     }
 
     if (mode === "apply_kit") {
-      const job = normalizeJob(body.job);
+      // 목록만 수집한 공고(요건 본문 없음)도 회사·직무·조건으로 문구를 만들 수 있게 느슨히 받습니다.
+      const job = normalizeJob(body.job) ?? normalizeJobLoose(body.job);
       const resume = normalizeResume(body.resume);
-      if (!job) {
-        fail(res, 400, "bad_job", "공고의 담당 업무나 자격 요건이 필요합니다.");
+      if (!job || (!job.role && !job.company)) {
+        fail(res, 400, "bad_job", "공고의 회사나 직무가 필요합니다.");
         return;
       }
       if (!resume) {

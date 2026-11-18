@@ -35,7 +35,7 @@ export function TopBar({
           </span>
           <span className="hidden flex-col leading-none sm:flex">
             <span className="text-[12.5px] font-semibold tracking-[-0.02em] text-ink">JobFit Studio</span>
-            <span className="mt-0.5 text-[9px] text-faint">공고 여러 개 · 지원은 한 곳에서</span>
+            <span className="mt-0.5 text-[9px] text-faint">공고는 알아서 · 지원은 한 곳에서</span>
           </span>
         </button>
 

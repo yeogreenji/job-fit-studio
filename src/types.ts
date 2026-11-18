@@ -42,6 +42,17 @@ export interface JobPosting {
   /** 원문 지원 버튼 문구 (예: 지원하기) */
   applyLabel?: string;
   tone: string;
+  /* ── 자동 수집으로 채운 실제 공고 정보 ── */
+  /** 경력 조건 (예: 경력 3~8년 · 신입·경력) */
+  experience?: string;
+  /** 급여 표기 (공고에 적힌 경우만) */
+  salary?: string;
+  /** 직무 태그 */
+  tags?: string[];
+  /** 목록에서 읽은 조건 한 줄 */
+  conditions?: string;
+  /** full: 본문 요건까지 읽음 · list: 목록 정보만 */
+  detailLevel?: "full" | "list";
 }
 
 export type KeywordStatus = "matched" | "weak" | "missing";
@@ -202,11 +213,17 @@ export interface PriorityOption {
 
 /** 공고를 어디서 가져왔는지. 결과 화면 상단에 출처를 남깁니다. */
 export interface JobSource {
-  kind: "url" | "paste" | "sample";
+  kind: "url" | "paste" | "sample" | "auto";
   url?: string;
   site?: string;
   fetchedAt?: string;
   note?: string;
+  /** 자동 수집 소스 식별자 (wanted · saramin · jobkorea) */
+  sourceId?: string;
+  /** 소스 안에서의 공고 번호 */
+  sourceJobId?: string;
+  /** 수집기가 본문까지 읽었는지 */
+  detailLevel?: "full" | "list";
 }
 
 /** 처우 협상 스크립트 묶음 */
@@ -384,6 +401,15 @@ export interface ApplyDraft {
   warnings?: number;
 }
 
+/** 첫 화면의 직무 프리셋 */
+export interface JobPreset {
+  id: string;
+  label: string;
+  /** 수집에 보낼 키워드. 비어 있으면 최신 공고 전체 */
+  query: string;
+  hint: string;
+}
+
 /** 허브에 모은 공고 한 건 — 공고 원문 + 지원 상태 + 메모 + 지원 문구 */
 export interface HubJob {
   id: string;
@@ -396,6 +422,8 @@ export interface HubJob {
   /** 제출서류 체크한 항목 */
   documentsChecked: string[];
   draft?: ApplyDraft;
+  /** 보드에 담아 둔 공고 (자동 수집분은 담아야 브라우저에 남습니다) */
+  saved?: boolean;
   createdAt: string;
   updatedAt: string;
 }

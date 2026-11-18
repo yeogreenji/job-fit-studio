@@ -1,4 +1,4 @@
-"""README용 화면 캡처 (공고 수집·직접 지원 허브)."""
+"""README용 화면 캡처 (공고 자동 수집·지원 허브)."""
 
 import os, socket, subprocess, time, atexit
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/workspace/.cache/ms-playwright")
@@ -14,7 +14,7 @@ os.makedirs(OUT, exist_ok=True)
 
 proc = subprocess.Popen([NODE, "scripts/e2e-server.mjs", "ai", str(PORT)], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 atexit.register(lambda: proc.terminate())
-for _ in range(150):
+for _ in range(200):
     try:
         socket.create_connection(("127.0.0.1", PORT), timeout=0.5)
         break
@@ -41,68 +41,76 @@ with sync_playwright() as p:
     page = ctx.new_page()
     attach(page)
     page.goto(BASE, wait_until="domcontentloaded")
-    page.wait_for_timeout(1400)
+    page.wait_for_selector("[data-testid=hub-job]", timeout=90000)
+    page.wait_for_timeout(2000)
     calm(page)
     page.screenshot(path=f"{OUT}/01-desktop-start.png")
 
-    page.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
-    page.wait_for_selector("[data-testid=resume-status]", timeout=15000)
-    page.fill(
-        "[data-testid=hub-urls]",
-        "https://www.jobkorea.co.kr/Recruit/GI_Read/987654\nhttps://www.wanted.co.kr/wd/123456",
-    )
-    page.click("[data-testid=hub-fetch]")
-    page.wait_for_selector("[data-testid=hub-detail]", timeout=45000)
-    page.wait_for_timeout(4000)
+    # 여러 소스가 함께 모인 보드 (PR·홍보)
+    page.click("[data-testid=preset-pr]")
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if page.locator("[data-testid=collect-sources] .chip").count() >= 2 and page.locator("[data-testid=hub-job]").count() >= 12:
+            break
+        page.wait_for_timeout(500)
+    page.wait_for_timeout(1500)
     calm(page)
     page.screenshot(path=f"{OUT}/02-desktop-jobs.png")
-    page.screenshot(path=f"{OUT}/02-desktop-jobs-full.png", full_page=True)
 
     page.locator("[data-testid=hub-requirements]").scroll_into_view_if_needed()
     calm(page)
     page.screenshot(path=f"{OUT}/03-desktop-requirements.png")
 
+    # 이력서를 넣으면 카드마다 지원 문구가 붙습니다.
+    page.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
+    page.wait_for_selector("[data-testid=resume-status]", timeout=20000)
+    page.wait_for_timeout(2500)
     page.locator("[data-testid=hub-apply-kit]").scroll_into_view_if_needed()
-    calm(page)
+    calm(page, 1500)
     page.screenshot(path=f"{OUT}/04-desktop-apply-kit.png")
 
     page.click("[data-testid=deep-open]")
-    page.wait_for_selector("[data-testid=result]", timeout=60000)
+    page.wait_for_selector("[data-testid=result]", timeout=90000)
     page.wait_for_timeout(3000)
     calm(page)
     page.screenshot(path=f"{OUT}/05-desktop-deep.png")
     page.click("[data-testid=new-job]")
     page.wait_for_timeout(800)
 
+    page.locator("[data-testid=hub-job]").first.click()
+    page.wait_for_timeout(600)
+    page.click("[data-testid=mark-applied]")
+    page.wait_for_timeout(600)
     page.click("[data-testid=nav-tracker]")
     page.wait_for_timeout(1200)
     calm(page)
     page.screenshot(path=f"{OUT}/06-desktop-tracker.png")
+    page.click("[data-testid=nav-studio]")
+    page.wait_for_timeout(600)
+    ctx.close()
 
+    # 모바일 390px
     mctx = browser.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
     mp = mctx.new_page()
     attach(mp)
     mp.goto(BASE, wait_until="domcontentloaded")
-    mp.wait_for_timeout(1400)
-    calm(mp)
+    mp.wait_for_selector("[data-testid=hub-job]", timeout=90000)
+    mp.wait_for_timeout(1500)
     mp.screenshot(path=f"{OUT}/07-mobile-start.png")
+    mp.locator("[data-testid=hub-list]").scroll_into_view_if_needed()
+    mp.wait_for_timeout(600)
+    mp.screenshot(path=f"{OUT}/08-mobile-hub.png")
     mp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
-    mp.wait_for_selector("[data-testid=resume-status]", timeout=15000)
-    mp.fill("[data-testid=hub-urls]", "https://www.jobkorea.co.kr/Recruit/GI_Read/987654")
-    mp.click("[data-testid=hub-fetch]")
-    mp.wait_for_selector("[data-testid=hub-detail]", timeout=30000)
-    mp.wait_for_timeout(3500)
-    calm(mp)
-    mp.screenshot(path=f"{OUT}/08-mobile-hub.png", full_page=True)
+    mp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
+    mp.locator("[data-testid=hub-job]").first.click()
+    mp.wait_for_timeout(2000)
     mp.locator("[data-testid=hub-apply-kit]").scroll_into_view_if_needed()
-    calm(mp)
+    mp.wait_for_timeout(900)
     mp.screenshot(path=f"{OUT}/09-mobile-apply-kit.png")
-    mp.click("[data-testid=nav-tracker]")
-    mp.wait_for_timeout(1000)
-    calm(mp)
+    mp.locator("[data-testid=nav-tracker]").click()
+    mp.wait_for_timeout(1200)
     mp.screenshot(path=f"{OUT}/10-mobile-tracker.png")
     mctx.close()
-
     browser.close()
 
 print("errors:", len(errors))

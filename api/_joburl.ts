@@ -319,11 +319,11 @@ const HEADINGS: { id: SectionKey; pattern: RegExp }[] = [
   },
   {
     id: "requirements",
-    pattern: /^(?:자격\s*요건|지원\s*자격|필수\s*요건|필수\s*역량|자격요건|요구\s*사항|Requirements|Qualifications|Who you are|What we(?:'|’)re looking for|Minimum qualifications|필수)$/i,
+    pattern: /^(?:자격\s*요건|지원\s*자격|응시\s*자격|자격\s*조건|필수\s*요건|필수\s*역량|자격요건|요구\s*사항|모집\s*요강|Requirements|Qualifications|Who you are|What we(?:'|’)re looking for|Minimum qualifications|필수)$/i,
   },
   {
     id: "preferred",
-    pattern: /^(?:우대\s*사항|우대|우대요건|있으면\s*좋은|Preferred|Nice to have|Preferred qualifications|Bonus points|Pluses)$/i,
+    pattern: /^(?:우대\s*사항|우대\s*조건|기본\s*우대|우대|우대요건|있으면\s*좋은|Preferred|Nice to have|Preferred qualifications|Bonus points|Pluses)$/i,
   },
   {
     id: "documents",
@@ -354,14 +354,25 @@ const cleanBlock = (lines: string[]): string =>
   lines
     .map((line) => line.replace(/^[\s•·▪◦‣]+/, "").replace(/^\d+[.)]\s*/, "").trim())
     .filter((line) => line.length > 1)
+    // 채용 사이트 공통 영역(로그인 유도·추천공고·기업정보 링크)은 요건이 아닙니다.
+    .filter((line) => !/^(?:로그인|회원가입|TOP|궁금해요|지도보기|인근지하철|이 기업의 취업 전략|비슷한 조건|AI추천공고|추천공고|스크랩|공유하기|채용정보|기업정보|접수기간|남은기간|시작일|마감일은|마감일|합격자소서|인적성·면접 후기)/.test(line))
+    .filter((line) => !/^\d{1,2}\.\d{1,2}\([월화수목금토일]\)$/.test(line))
     .slice(0, 14)
     .join("\n");
+
+/** 다른 공고·합격자소서 예시 같은 다른 성격의 글자가 시작되는 지점 — 수집을 멈춥니다. */
+const STOP_LINE =
+  /^(?:보유기술 및 경험직무|합격자소서|인적성·면접 후기|이 기업의 취업 전략|비슷한 조건의 공고|AI추천공고|추천공고|최근 본 공고|연관 공고|관련 공고)/;
 
 export function splitSections(text: string): Pick<ExtractedJob, "responsibilities" | "requirements" | "preferred" | "documents" | "tone"> {
   const lines = text.split("\n").map((line) => line.trim());
   const buckets: Record<string, string[]> = { responsibilities: [], requirements: [], preferred: [], documents: [], tone: [] };
   let current: SectionKey | null = null;
   for (const line of lines) {
+    if (STOP_LINE.test(line)) {
+      current = null;
+      continue;
+    }
     const heading = isHeading(line);
     if (heading) {
       current = heading.id;
@@ -418,7 +429,7 @@ const titleParts = (title: string): string[] =>
 const APPLY_LABEL =
   /(지원\s*하기|지원하기|입사\s*지원|입사지원|지원\s*접수|지원서\s*작성|온라인\s*지원|apply(?:\s*now)?|submit\s*(?:application|resume)|join\s*us)/i;
 const APPLY_HREF = /(apply|application|applyform|입사지원)/i;
-const SKIP_HREF = /(login|signin|sign-in|logout|privacy|terms|policy|faq|help|customer|javascript:|mailto:|tel:)/i;
+const SKIP_HREF = /(login|signin|sign-in|logout|privacy|terms|policy|faq|help|customer|apply-status|mypage|member|javascript:|mailto:|tel:)/i;
 
 /**
  * 원문 공고의 ‘지원하기’ 링크를 찾습니다.
@@ -481,6 +492,25 @@ export function extractApplyLink(
   return { applyUrl: baseUrl, applyLabel: "원문 공고" };
 }
 
+/** 구조화 데이터의 고용형태 영문 코드를 화면에 익숙한 한국어로 바꿉니다. */
+const EMPLOYMENT_LABELS: Record<string, string> = {
+  FULL_TIME: "정규직",
+  PART_TIME: "파트타임",
+  CONTRACTOR: "계약직",
+  TEMPORARY: "계약직",
+  INTERN: "인턴",
+  INTERNSHIP: "인턴",
+  FREELANCE: "프리랜서",
+  PER_DIEM: "기간제",
+  OTHER: "",
+};
+
+const mapEmployment = (value: string): string => {
+  const key = value.trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (EMPLOYMENT_LABELS[key] !== undefined) return EMPLOYMENT_LABELS[key];
+  return value.replace(/\bFULL_TIME\b/gi, "정규직").replace(/\bCONTRACTOR\b/gi, "계약직").replace(/\bINTERN\b/gi, "인턴").trim();
+};
+
 export function structureFromPage(page: FetchedPage): ExtractedJob {
   const ld = page.ld;
   const parts = titleParts(page.title);
@@ -510,19 +540,23 @@ export function structureFromPage(page: FetchedPage): ExtractedJob {
     "";
   const role = labeled(["직무", "포지션", "모집부문", "채용직무", "Position", "Role"]) || ldTitle || parts[0] || "";
 
-  const employmentType =
-    labeled(["고용\\s*형태", "고용형태", "Employment"]) ||
-    ldEmployment ||
-    (/정규직|계약직|인턴|프리랜서/.exec(page.text)?.[0] ?? "");
+  // 채용 사이트 이름을 회사·직무로 읽으면 공고가 아닌 값이 됩니다.
+  const PORTAL = /^(?:사람인|잡코리아|원티드|링크드인|점핏|로켓펀치|인크루트|JobKorea|Saramin)$/i;
+  const cleanCompany = PORTAL.test(company.trim()) ? "" : company;
+  const cleanRole = PORTAL.test(role.trim()) ? "" : role;
+
+  const defaultEmployment = /정규직|계약직|인턴|프리랜서/.exec(page.text)?.[0] ?? "";
+  const normalizedEmployment =
+    labeled(["고용\\s*형태", "고용형태", "Employment"]) || ldEmployment || defaultEmployment;
   const location = labeled(["근무지", "근무\\s*지역", "Location"]) || ldLocation;
   const deadline = labeled(["마감일", "접수\\s*기간", "마감", "Deadline"]) || (ld ? firstString((ld as Record<string, unknown>).validThrough) : "");
 
   const link = extractApplyLink(page.html, page.finalUrl, ld);
 
   return {
-    company: company.slice(0, 80),
-    role: role.slice(0, 80),
-    employmentType: employmentType.slice(0, 30),
+    company: cleanCompany.slice(0, 80),
+    role: cleanRole.slice(0, 80),
+    employmentType: mapEmployment(normalizedEmployment).slice(0, 30),
     location: location.slice(0, 60),
     deadline: deadline.slice(0, 40),
     responsibilities: sections.responsibilities,

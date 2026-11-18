@@ -74,11 +74,20 @@ interface KitSignals {
 /** 공고와 이력서에서 문구 재료를 고릅니다(규칙). */
 function signalsOf(resume: MasterResume, job: JobPosting): KitSignals {
   const { match } = analyze(resume, job);
+  const seenTokens = new Set<string>();
   const keywords = match.keywords
     .filter((keyword) => keyword.status !== "missing")
     .sort((a, b) => b.weight * b.coverage - a.weight * a.coverage)
     .map((keyword) => keyword.label)
     .filter((label, index, all) => all.indexOf(label) === index)
+    // '브랜드 커뮤니케이션 · 커뮤니케이션 전략'처럼 같은 단어가 겹치면 뒤쪽은 남은 단어만 씁니다.
+    .map((label) => {
+      const fresh = label.split(/\s+/).filter((token) => token && !seenTokens.has(token));
+      if (!fresh.length) return "";
+      for (const token of fresh) seenTokens.add(token);
+      return fresh.join(" ");
+    })
+    .filter(Boolean)
     .slice(0, 3);
   const bullets = rankBullets(resume, match)
     .filter((bullet) => bullet.text.length > 8)

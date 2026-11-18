@@ -12,6 +12,9 @@ import { guessKind, buildPreview, readFileText } from "./lib/import";
 import { extractPdfText } from "./lib/pdf";
 import { applySources, buildLocalApplyKit, mergeAiApplyKit } from "./lib/apply";
 import { fetchMany, hubJobFromOutcome, hubJobFromPaste, splitJobUrls, urlKey, type AddProgress } from "./lib/hub";
+import { fetchJobFromUrl } from "./lib/jobUrl";
+import { CollectError, isTrackedJob, mergeCollected, requestJobs, type CollectionState } from "./lib/collect";
+import { CUSTOM_PRESET, presetById } from "./lib/jobPresets";
 import {
   addPackage,
   clearPackages,
@@ -62,6 +65,18 @@ export default function App() {
 
   const [hubJobs, setHubJobs] = useState<HubJob[]>(() => loadHubJobs());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [collection, setCollection] = useState<CollectionState>({
+    preset: "all",
+    keyword: "",
+    applied: "",
+    region: "전체",
+    sort: "latest",
+    status: "idle",
+    sources: [],
+    at: null,
+    error: "",
+    cached: false,
+  });
   const [urlsText, setUrlsText] = useState("");
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState("");
@@ -69,6 +84,8 @@ export default function App() {
   const [adding, setAdding] = useState(false);
   const [progress, setProgress] = useState<AddProgress[]>([]);
   const [aiDraftBusyId, setAiDraftBusyId] = useState<string | null>(null);
+  const [enrichBusyId, setEnrichBusyId] = useState<string | null>(null);
+  const [savedSignal, setSavedSignal] = useState(0);
 
   const [prefs, setPrefs] = useState(() => loadPrefs());
   const [pkg, setPkg] = useState<JobPackage | null>(null);
@@ -84,6 +101,9 @@ export default function App() {
 
   const jobsRef = useRef(hubJobs);
   jobsRef.current = hubJobs;
+  const collectionRef = useRef(collection);
+  collectionRef.current = collection;
+  const collectedOnce = useRef(false);
 
   const notify = useCallback((message: string, tone: ToastTone = "ok") => {
     setToast({ id: Date.now(), message, tone });
@@ -142,6 +162,149 @@ export default function App() {
   const patchJob = useCallback((id: string, patch: (job: HubJob) => HubJob) => {
     setHubJobs((prev) => prev.map((job) => (job.id === id ? { ...patch(job), updatedAt: new Date().toISOString() } : job)));
   }, []);
+
+  /* ── 공고 자동 수집 ── */
+
+  const runCollect = useCallback(
+    async (override?: { preset?: string; keyword?: string }) => {
+      const current = collectionRef.current;
+      const presetId = override?.preset ?? current.preset;
+      const keyword = override?.keyword ?? current.keyword;
+      const preset = presetById(presetId);
+      const query = preset ? preset.query : keyword.trim();
+      if (!preset && !query) {
+        notify("직무를 고르거나 키워드를 입력해 주세요.", "warn");
+        return;
+      }
+      setCollection((prev) => ({
+        ...prev,
+        preset: presetId,
+        keyword: preset ? prev.keyword : keyword,
+        applied: query,
+        status: "loading",
+        error: "",
+      }));
+      try {
+        const data = await requestJobs({ query, limit: 36, detail: 12 });
+        setHubJobs((prev) => mergeCollected(prev, data.jobs, data.fetchedAt));
+        setCollection((prev) => ({
+          ...prev,
+          status: data.jobs.length ? "ready" : "empty",
+          sources: data.sources,
+          at: data.fetchedAt,
+          cached: Boolean(data.cached),
+          error: "",
+        }));
+        if (!data.jobs.length) {
+          notify("이 조건에 맞는 공고를 찾지 못했습니다. 다른 직무·키워드로 시도해 보세요.", "warn");
+        } else {
+          const label = preset && preset.id !== "all" ? preset.label : query ? `‘${query}’` : "최신";
+          notify(`${label} 공고 ${data.jobs.length}건을 실제 채용 사이트에서 모았습니다.`);
+        }
+      } catch (error) {
+        const message = error instanceof CollectError || error instanceof Error ? error.message : "공고를 모으지 못했습니다.";
+        setCollection((prev) => ({ ...prev, status: "error", error: message, sources: [] }));
+        notify(message, "warn");
+      }
+    },
+    [notify],
+  );
+
+  /** 첫 화면부터 실제 공고가 보이도록 한 번 자동으로 모읍니다. */
+  useEffect(() => {
+    if (collectedOnce.current) return;
+    collectedOnce.current = true;
+    void runCollect({ preset: collectionRef.current.preset || "all" });
+  }, [runCollect]);
+
+  const pickPreset = useCallback(
+    (id: string) => {
+      setCollection((prev) => ({ ...prev, preset: id }));
+      void runCollect({ preset: id });
+    },
+    [runCollect],
+  );
+
+  const collectKeyword = useCallback(() => {
+    const keyword = collectionRef.current.keyword.trim();
+    if (!keyword) {
+      notify("찾고 싶은 직무나 키워드를 입력해 주세요.", "warn");
+      return;
+    }
+    setCollection((prev) => ({ ...prev, preset: CUSTOM_PRESET }));
+    void runCollect({ preset: CUSTOM_PRESET, keyword });
+  }, [notify, runCollect]);
+
+  const toggleSaveJob = useCallback(
+    (id: string) => {
+      const target = jobsRef.current.find((job) => job.id === id);
+      if (!target) return;
+      if (target.saved) {
+        const stillTracked = target.status !== "지원 전" || Boolean(target.memo.trim()) || target.documentsChecked.length > 0;
+        patchJob(id, (job) => ({ ...job, saved: false }));
+        notify(
+          stillTracked ? "북마크는 뺐습니다. 지원 상태·메모가 있어 보드에 남습니다." : "내 지원에서 뺐습니다.",
+          "warn",
+        );
+      } else {
+        patchJob(id, (job) => ({ ...job, saved: true }));
+        notify(`${target.job.company || "공고"}를 내 지원에 담았습니다.`);
+      }
+    },
+    [notify, patchJob],
+  );
+
+  /** 목록 정보만 있는 공고의 요건을 원문에서 읽어 채웁니다. */
+  const enrichJob = useCallback(
+    async (id: string) => {
+      const target = jobsRef.current.find((job) => job.id === id);
+      const url = target?.applyUrl || target?.source.url;
+      if (!target || !url) {
+        notify("공고 원문 주소가 없습니다. URL을 직접 추가해 주세요.", "warn");
+        return;
+      }
+      setEnrichBusyId(id);
+      try {
+        const result = await fetchJobFromUrl(url, aiConfig);
+        // 채용 사이트 이름이 회사명으로 읽히면 원문을 잘못 읽은 것이므로 버립니다.
+        const PORTAL = /^(?:사람인|잡코리아|원티드|링크드인|점핏|로켓펀치|인크루트)$/;
+        const company = PORTAL.test(result.job.company.trim()) ? "" : result.job.company;
+        const hasBody = Boolean(result.job.responsibilities || result.job.requirements);
+        patchJob(id, (job) => ({
+          ...job,
+          job: {
+            ...job.job,
+            company: company || job.job.company,
+            role: result.job.role || job.job.role,
+            employmentType: result.job.employmentType || job.job.employmentType,
+            location: result.job.location || job.job.location,
+            deadline: result.job.deadline || job.job.deadline,
+            responsibilities: result.job.responsibilities || job.job.responsibilities,
+            requirements: result.job.requirements || job.job.requirements,
+            preferred: result.job.preferred || job.job.preferred,
+            documents: result.job.documents || job.job.documents,
+            tone: result.job.tone || job.job.tone,
+            detailLevel: hasBody ? "full" : job.job.detailLevel,
+          },
+          applyUrl: result.job.applyUrl || job.applyUrl,
+          saved: true,
+          draft: undefined,
+        }));
+        notify(
+          hasBody
+            ? `${company || "공고"}의 요건을 원문에서 읽었습니다. 지원 문구를 다시 만듭니다.`
+            : "원문에서 요건 글자를 찾지 못했습니다. 공고 본문을 붙여넣어 주세요.",
+          hasBody ? "ok" : "warn",
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "요건을 읽지 못했습니다.";
+        notify(`${message} 원문에서 직접 확인해 주세요.`, "warn");
+      } finally {
+        setEnrichBusyId(null);
+      }
+    },
+    [aiConfig, notify, patchJob],
+  );
 
   /* ── 이력서 ── */
 
@@ -248,6 +411,17 @@ export default function App() {
 
   const selected = useMemo(() => hubJobs.find((job) => job.id === selectedId) ?? hubJobs[0] ?? null, [hubJobs, selectedId]);
 
+  /** 수집 결과가 바뀌어 고른 공고가 사라지면, 새로 모인 첫 공고를 고릅니다. */
+  useEffect(() => {
+    if (!hubJobs.length) {
+      if (selectedId) setSelectedId(null);
+      return;
+    }
+    if (selectedId && hubJobs.some((job) => job.id === selectedId)) return;
+    const first = hubJobs.find((job) => job.source.kind === "auto" && !isTrackedJob(job)) ?? hubJobs[0];
+    setSelectedId(first.id);
+  }, [hubJobs, selectedId]);
+
   /** 카드를 고르면 규칙 문구를 즉시 만들고, AI가 연결돼 있으면 한 번 더 다듬습니다. */
   useEffect(() => {
     if (!selected) return;
@@ -301,6 +475,7 @@ export default function App() {
       if (added.length) {
         setHubJobs((prev) => [...added, ...prev]);
         setSelectedId(added[0].id);
+        setSavedSignal((value) => value + 1);
         setUrlsText(failed.length ? urls.filter((_, index) => !outcomes[index]?.ok).join("\n") : "");
         notify(
           failed.length
@@ -326,6 +501,7 @@ export default function App() {
     const next = hubJobFromPaste(pasteText, pasteUrl);
     setHubJobs((prev) => [next, ...prev]);
     setSelectedId(next.id);
+    setSavedSignal((value) => value + 1);
     setPasteText("");
     setPasteUrl("");
     setPasteOpen(false);
@@ -511,7 +687,23 @@ export default function App() {
     onSampleResume: useSampleResume,
     jobs: hubJobs,
     selected,
-    onSelect: setSelectedId,
+    onSelect: (id: string) => {
+      setSelectedId(id);
+      // 모바일에서는 목록 아래에 상세가 열리므로 그쪽으로 이동합니다.
+      if (typeof window !== "undefined" && window.innerWidth < 1024) {
+        window.setTimeout(() => document.querySelector("[data-testid=hub-detail]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 90);
+      }
+    },
+    collection,
+    onPreset: pickPreset,
+    onKeyword: (value: string) => setCollection((prev) => ({ ...prev, keyword: value })),
+    onCollect: collectKeyword,
+    onRegion: (value: string) => setCollection((prev) => ({ ...prev, region: value })),
+    onSort: (value: "latest" | "deadline") => setCollection((prev) => ({ ...prev, sort: value })),
+    onToggleSave: toggleSaveJob,
+    onEnrich: (id: string) => void enrichJob(id),
+    enrichBusyId,
+    savedSignal,
     urlsText,
     onUrlsText: setUrlsText,
     onAddUrls: () => void addUrls(),
@@ -550,7 +742,7 @@ export default function App() {
           aiStatus={aiStatus}
           onOpenAi={() => setAiOpen(true)}
           onOpenHelp={() => setHelpOpen(true)}
-          hubCount={hubJobs.length}
+          hubCount={hubJobs.filter((job) => job.source.kind !== "auto" || isTrackedJob(job)).length}
           appliedCount={hubJobs.filter((job) => job.status === "지원완료" || job.status === "서류합격" || job.status === "면접").length}
         />
 
@@ -560,7 +752,7 @@ export default function App() {
               <HistoryView packages={saved} onLoad={loadPackage} onDelete={deletePackage} onClear={() => setSaved(clearPackages())} onBack={() => changeView("studio")} />
             ) : view === "tracker" ? (
               <TrackerView
-                jobs={hubJobs}
+                jobs={hubJobs.filter((job) => job.source.kind !== "auto" || isTrackedJob(job))}
                 onUpdate={updateJob}
                 onOpenJob={(id) => {
                   setSelectedId(id);
@@ -630,11 +822,11 @@ export default function App() {
               </div>
               <ol className="mt-4 max-h-[54vh] space-y-2.5 overflow-y-auto px-5">
                 {[
-                  "‘공고 모으기’ 칸에 공고 주소를 한 줄에 하나씩 여러 개 붙여넣고 ‘공고 N개 불러오기’를 누릅니다. 하나씩 추가해도 됩니다.",
-                  "서버가 각 공고의 주요 업무·자격 요건·우대 사항·제출서류·마감일과 원문 지원 링크를 직접 읽어 옵니다. 로그인·차단 사이트는 본문을 붙여넣어 추가합니다.",
-                  "이력서를 한 번 등록해 두면, 공고 카드를 고를 때마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 복사 버튼으로 지원서에 붙여넣으세요.",
-                  "‘이 공고에 직접 지원하기’를 누르면 원문 공고가 새 탭으로 열립니다. 지원 후 상태를 지원 전 → 준비중 → 지원완료 → 서류합격 → 면접으로 바꾸고 메모를 남기세요.",
-                  "제출서류가 있는 공고는 체크리스트로 빠뜨리지 않게 확인합니다. 면접 연습·처우 협상이 필요할 때만 ‘심층 준비 열기’를 사용하세요.",
+                  "직무 프리셋을 고르면 원티드·사람인·잡코리아에서 지금 올라온 실제 공고를 자동으로 모아 옵니다. 키워드를 직접 넣어도 됩니다.",
+                  "카드를 고르면 주요 업무·자격 요건·우대 사항·마감일과 원문 지원 링크가 열립니다. 목록 정보만 있는 공고는 ‘원문에서 요건 읽어오기’로 채웁니다.",
+                  "이력서를 한 번 등록해 두면 공고마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 복사해서 지원서에 붙여넣으세요.",
+                  "‘원문에서 지원하기’를 누르면 실제 공고가 새 탭으로 열립니다. 지원 후 상태를 지원 전 → 준비중 → 지원완료 → 서류합격 → 면접으로 바꾸고 메모를 남기세요.",
+                  "카드의 북마크를 누르면 ‘내 지원’에 남아 다음 방문에도 유지됩니다. 제출서류 체크도 함께 저장됩니다.",
                   "공고·상태·메모·지원 문구는 이 브라우저에 저장됩니다. 원문에 없는 경험·수치는 AI도 만들지 않습니다.",
                 ].map((text, index) => (
                   <li key={index} className="flex gap-2.5">
