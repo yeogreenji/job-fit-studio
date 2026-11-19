@@ -201,6 +201,56 @@ function ResumeStrip(props: HubProps) {
   );
 }
 
+const COMPANY_TYPE_LABEL: Record<string, string> = {
+  inhouse: "인하우스",
+  searchfirm: "헤드헌팅",
+  agency: "에이전시",
+};
+
+const COMPANY_TYPE_HINT: Record<string, string> = {
+  inhouse: "기업 자체 홍보·커뮤니케이션 조직",
+  searchfirm: "서치펌이 올린 공고 — 고용주는 원문에서 확인",
+  agency: "PR 에이전시·대행사 공고",
+};
+
+function CompanyTypeChip({ type }: { type?: string }) {
+  const label = type ? COMPANY_TYPE_LABEL[type] : "";
+  if (!label) return null;
+  return (
+    <span
+      className={cx(
+        "chip px-1.5 py-0 text-[9px]",
+        type === "inhouse" ? "bg-accent-soft text-accent-deep" : type === "searchfirm" ? "bg-info-soft text-info" : "bg-warn-soft text-warn",
+      )}
+      title={type ? COMPANY_TYPE_HINT[type] : undefined}
+      data-testid="company-type"
+      data-company-type={type}
+    >
+      {label}
+    </span>
+  );
+}
+
+function FilterNote({ collection }: { collection: CollectionState }) {
+  const filter = collection.filter;
+  if (!filter) return null;
+  const { excluded } = filter;
+  const cut = excluded.region + excluded.role + excluded.junior + excluded.agency;
+  return (
+    <div
+      className="mt-2 rounded-lg border border-line bg-paper-deep/50 px-2.5 py-1.5 text-[10px] leading-relaxed text-muted"
+      data-testid="filter-note"
+      data-raw={filter.raw}
+      data-kept={filter.kept}
+    >
+      <span className="font-semibold text-ink-2">{filter.label}</span> 기준 · 수집 {filter.raw}건 중 <span className="num">{cut}</span>건 제외({" "}
+      지방·경기 <span className="num">{excluded.region}</span> · 직무 불일치 <span className="num">{excluded.role}</span> · 신입·주니어{" "}
+      <span className="num">{excluded.junior}</span> · 에이전시·대행사 <span className="num">{excluded.agency}</span>) →{" "}
+      <span className="num font-semibold text-accent-deep">{collection.status === "loading" ? "…" : filter.kept}</span>건
+    </div>
+  );
+}
+
 function SourcePills({ collection }: { collection: CollectionState }) {
   if (!collection.sources.length) return null;
   return (
@@ -235,11 +285,11 @@ function CollectionBar(props: HubProps) {
           <Radar size={12} />
         </span>
         <span className="text-[12px] font-semibold text-ink">공고 자동 수집</span>
-        <span className="text-[10px] text-muted">원티드 · 사람인 · 잡코리아</span>
+        <span className="text-[10px] text-muted">리멤버 · 원티드 · 사람인 · 잡코리아</span>
         <span className="ml-auto flex items-center gap-1.5 text-[9.5px] text-faint">
           {loading ? (
             <>
-              <Loader2 size={11} className="animate-spin" /> 세 곳에서 모으는 중
+              <Loader2 size={11} className="animate-spin" /> 네 곳에서 모으는 중
             </>
           ) : collection.at ? (
             <>
@@ -272,6 +322,8 @@ function CollectionBar(props: HubProps) {
             );
           })}
         </div>
+
+        <FilterNote collection={collection} />
 
         <div className="mt-2 flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
@@ -342,6 +394,19 @@ function CollectionBar(props: HubProps) {
           </span>
           <SourcePills collection={collection} />
         </div>
+
+        {collection.sources.some((source) => !source.ok && source.note) && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9.5px] leading-relaxed text-warn" data-testid="source-notes">
+            <CircleAlert size={10} className="shrink-0" />
+            {collection.sources
+              .filter((source) => !source.ok && source.note)
+              .map((source) => (
+                <span key={source.id} data-source={source.id}>
+                  {source.name} — {source.note}
+                </span>
+              ))}
+          </div>
+        )}
 
         {collection.status === "error" && (
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-warn/25 bg-warn-soft px-2.5 py-2 text-[10.5px] leading-relaxed text-warn" data-testid="collect-error">
@@ -465,6 +530,7 @@ function JobCard({ item, active, onSelect, onToggleSave }: { item: HubJob; activ
         <span className="flex items-center gap-1.5">
           <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: STATUS_DOT[item.status] }} />
           <span className="min-w-0 truncate text-[12px] font-semibold text-ink">{item.job.company || "회사 미확인"}</span>
+          <CompanyTypeChip type={item.job.companyType} />
           <span className="chip ml-auto shrink-0 bg-paper-deep px-1.5 py-0.5 text-[9px] text-faint">{item.source.site || "직접 추가"}</span>
         </span>
         <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-ink-2">{item.job.role || "직무 미확인"}</span>
@@ -563,7 +629,7 @@ function JobList(props: HubProps) {
             {tab === "feed"
               ? query
                 ? `‘${query}’ 조건을 바꾸거나 다른 직무를 골라 다시 모아 보세요.`
-                : "위에서 직무를 고르면 원티드·사람인·잡코리아에서 공고를 모아 옵니다."
+                : "위에서 직무를 고르면 리멤버·원티드·사람인·잡코리아에서 공고를 모아 옵니다."
               : "공고 카드의 북마크를 누르면 여기에 남고, 지원 상태·메모와 함께 저장됩니다."}
           </p>
         </div>
@@ -871,6 +937,7 @@ function JobDetail(props: HubProps & { item: HubJob }) {
           <span className="chip bg-info-soft text-[9.5px] text-info" data-testid="detail-site">
             <Link2 size={10} /> {item.source.site || hostOf(item.source.url ?? "")}
           </span>
+          <CompanyTypeChip type={job.companyType} />
           {job.experience && <span className="chip bg-paper-deep text-[9.5px] text-muted">{job.experience}</span>}
           {job.employmentType && <span className="chip bg-paper-deep text-[9.5px] text-muted">{job.employmentType}</span>}
           {job.location && (
@@ -1089,7 +1156,7 @@ export function Hub(props: HubProps) {
               <br className="sm:hidden" /> 지원은 여기서.
             </h1>
             <p className="mt-2 text-[12px] leading-relaxed text-muted sm:text-[13px]">
-              직무를 고르면 <strong className="font-semibold text-ink-2">원티드·사람인·잡코리아</strong>에서 지금 올라온 실제 공고를 모아 옵니다. 카드를 고르면 내 이력서로 만든
+              첫 화면은 <strong className="font-semibold text-ink-2">리멤버·원티드·사람인·잡코리아</strong>에서 서울 인하우스 홍보·PR 과차장급만 모아 옵니다. 카드를 고르면 내 이력서로 만든
               지원 문구가 바로 나오고, 원문으로 넘어가 직접 지원합니다.
             </p>
           </div>

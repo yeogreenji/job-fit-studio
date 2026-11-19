@@ -14,7 +14,7 @@ import { applySources, buildLocalApplyKit, mergeAiApplyKit } from "./lib/apply";
 import { fetchMany, hubJobFromOutcome, hubJobFromPaste, splitJobUrls, urlKey, type AddProgress } from "./lib/hub";
 import { fetchJobFromUrl } from "./lib/jobUrl";
 import { CollectError, isTrackedJob, mergeCollected, requestJobs, type CollectionState } from "./lib/collect";
-import { CUSTOM_PRESET, presetById } from "./lib/jobPresets";
+import { CUSTOM_PRESET, DEFAULT_PRESET, presetById } from "./lib/jobPresets";
 import {
   addPackage,
   clearPackages,
@@ -66,9 +66,11 @@ export default function App() {
   const [hubJobs, setHubJobs] = useState<HubJob[]>(() => loadHubJobs());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [collection, setCollection] = useState<CollectionState>({
-    preset: "all",
+    preset: DEFAULT_PRESET,
     keyword: "",
     applied: "",
+    profile: "",
+    filter: null,
     region: "전체",
     sort: "latest",
     status: "idle",
@@ -172,6 +174,7 @@ export default function App() {
       const keyword = override?.keyword ?? current.keyword;
       const preset = presetById(presetId);
       const query = preset ? preset.query : keyword.trim();
+      const profile = preset?.profile ?? "";
       if (!preset && !query) {
         notify("직무를 고르거나 키워드를 입력해 주세요.", "warn");
         return;
@@ -181,11 +184,12 @@ export default function App() {
         preset: presetId,
         keyword: preset ? prev.keyword : keyword,
         applied: query,
+        profile,
         status: "loading",
         error: "",
       }));
       try {
-        const data = await requestJobs({ query, limit: 36, detail: 12 });
+        const data = await requestJobs({ query, limit: profile ? 60 : 36, detail: profile ? 8 : 12, profile: profile || undefined });
         setHubJobs((prev) => mergeCollected(prev, data.jobs, data.fetchedAt));
         setCollection((prev) => ({
           ...prev,
@@ -193,10 +197,17 @@ export default function App() {
           sources: data.sources,
           at: data.fetchedAt,
           cached: Boolean(data.cached),
+          filter: data.filter ?? null,
           error: "",
         }));
         if (!data.jobs.length) {
           notify("이 조건에 맞는 공고를 찾지 못했습니다. 다른 직무·키워드로 시도해 보세요.", "warn");
+        } else if (data.filter) {
+          const excluded = data.filter.excluded;
+          const cut = excluded.region + excluded.role + excluded.junior + excluded.agency;
+          notify(
+            `${data.filter.label} 기준으로 ${data.jobs.length}건을 남겼습니다. 수집 ${data.filter.raw}건 중 ${cut}건은 조건 밖이라 뺐습니다.`,
+          );
         } else {
           const label = preset && preset.id !== "all" ? preset.label : query ? `‘${query}’` : "최신";
           notify(`${label} 공고 ${data.jobs.length}건을 실제 채용 사이트에서 모았습니다.`);
@@ -214,7 +225,7 @@ export default function App() {
   useEffect(() => {
     if (collectedOnce.current) return;
     collectedOnce.current = true;
-    void runCollect({ preset: collectionRef.current.preset || "all" });
+    void runCollect({ preset: collectionRef.current.preset || DEFAULT_PRESET });
   }, [runCollect]);
 
   const pickPreset = useCallback(
@@ -822,7 +833,7 @@ export default function App() {
               </div>
               <ol className="mt-4 max-h-[54vh] space-y-2.5 overflow-y-auto px-5">
                 {[
-                  "직무 프리셋을 고르면 원티드·사람인·잡코리아에서 지금 올라온 실제 공고를 자동으로 모아 옵니다. 키워드를 직접 넣어도 됩니다.",
+                  "첫 화면에서는 리멤버·원티드·사람인·잡코리아에서 서울 인하우스 홍보·PR 과차장급 공고를 자동으로 모아 옵니다. 다른 직무 프리셋을 고르거나 키워드를 직접 넣어도 됩니다.",
                   "카드를 고르면 주요 업무·자격 요건·우대 사항·마감일과 원문 지원 링크가 열립니다. 목록 정보만 있는 공고는 ‘원문에서 요건 읽어오기’로 채웁니다.",
                   "이력서를 한 번 등록해 두면 공고마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 복사해서 지원서에 붙여넣으세요.",
                   "‘원문에서 지원하기’를 누르면 실제 공고가 새 탭으로 열립니다. 지원 후 상태를 지원 전 → 준비중 → 지원완료 → 서류합격 → 면접으로 바꾸고 메모를 남기세요.",

@@ -2,7 +2,7 @@
 JobFit Studio E2E 검증 — 공고 자동 수집·지원 허브.
 
 검사 범위
-  · /api/jobs: 실제 소스(원티드·사람인·잡코리아) 수집, 캐시, 잘못된 요청, 정적 호스팅 404
+  · /api/jobs: 실제 소스(리멤버·원티드·사람인·잡코리아) 수집, 기본 타깃 프로필 필터, 캐시, 잘못된 요청, 정적 호스팅 404
   · /api/analyze: job_url(수동 URL 보조), apply_kit, package, Gemini 경로
   · 화면: 첫 화면 자동 수집 → 직무 프리셋/지역/정렬 → 원문 지원 링크 → 지원 문구 초안
           → 북마크·상태·메모 저장(새로고침 유지) → 트래커 → URL/본문 보조 추가 → 심층 준비
@@ -232,7 +232,8 @@ check("api OPTIONS 204", status == 204, str(status))
 
 status, body, _ = jobs_api(4383, query="ping=1")
 check("jobs ping", status == 200 and body.get("service") == "jobfit-jobs", str(body)[:140])
-check("jobs ping sources", {"wanted", "saramin", "jobkorea"}.issubset(set(body.get("sources") or [])), str(body.get("sources")))
+check("jobs ping sources", {"remember", "wanted", "saramin", "jobkorea"}.issubset(set(body.get("sources") or [])), str(body.get("sources")))
+check("jobs ping profiles", "seoul-inhouse-pr" in (body.get("profiles") or []), str(body.get("profiles")))
 
 status, body, _ = jobs_api(4383, {"q": "", "limit": 24, "detail": 6})
 latest = body.get("jobs") or []
@@ -268,6 +269,26 @@ check(
     all(re.search(r"GI_Read/\d+", job["url"]) for job in keyword_jobs if job.get("source") == "jobkorea"),
     "jobkorea url shape",
 )
+remember_keyword = [job for job in keyword_jobs if job.get("source") == "remember"]
+remember_keyword_report = {item.get("id"): item for item in body.get("sources") or []}.get("remember", {})
+if remember_keyword_report.get("ok"):
+    check(
+        "jobs keyword remember urls",
+        all(re.search(r"/job/posting/\d+$", job["url"]) for job in remember_keyword),
+        str([job["url"] for job in remember_keyword][:2]),
+    )
+    check(
+        "jobs keyword remember detail",
+        any(len(job.get("requirements") or "") > 20 for job in remember_keyword),
+        "remember full text",
+    )
+else:
+    # 리멤버가 요청 제한(Cloudflare 429)이면 소스 리포트에 그 사실이 남아야 합니다.
+    check(
+        "jobs keyword remember rate limit reported",
+        "리멤버" in (remember_keyword_report.get("note") or ""),
+        str(remember_keyword_report)[:160],
+    )
 check(
     "jobs keyword no duplicates",
     len({(job.get("company"), job.get("role")) for job in keyword_jobs}) == len(keyword_jobs),
@@ -283,6 +304,68 @@ check("jobs report counts match", sum(item.get("count", 0) for item in body.get(
 
 status, body, _ = jobs_api(4383, {"q": "홍보", "limit": 36, "detail": 8})
 check("jobs cache hit", status == 200 and body.get("cached") is True, str(body.get("cached")))
+
+# ── 기본 타깃 프로필: 서울 · 인하우스 홍보/PR · 과차장급 ──
+status, body, _ = jobs_api(4383, {"profile": "seoul-inhouse-pr", "limit": 60, "detail": 8})
+profiled = body.get("jobs") or []
+filter_report = body.get("filter") or {}
+excluded = filter_report.get("excluded") or {}
+check("jobs profile 200", status == 200 and body.get("ok") is True, f"{status} {str(body)[:160]}")
+check("jobs profile keeps jobs", len(profiled) >= 8, str(len(profiled)))
+check(
+    "jobs profile all seoul",
+    all("서울" in (job.get("location") or "") for job in profiled),
+    str([(job.get("company"), job.get("location")) for job in profiled if "서울" not in (job.get("location") or "")][:3]),
+)
+check(
+    "jobs profile no agency",
+    all(job.get("companyType") != "agency" for job in profiled),
+    str([(job.get("company"), job.get("companyType")) for job in profiled if job.get("companyType") == "agency"][:3]),
+)
+check(
+    "jobs profile inhouse share",
+    sum(1 for job in profiled if job.get("companyType") == "inhouse") >= 5,
+    str(sum(1 for job in profiled if job.get("companyType") == "inhouse")),
+)
+check(
+    "jobs profile no junior titles",
+    all(not re.search(r"인턴|신입|주니어|보조|대리급", job.get("role") or "") for job in profiled),
+    str([job.get("role") for job in profiled if re.search(r"인턴|신입|주니어|보조|대리급", job.get("role") or "")][:3]),
+)
+check(
+    "jobs profile pr roles",
+    all(re.search(r"홍보|PR|피알|커뮤니케이션|대외|언론|미디어|보도|대관|브랜딩|Public|Communication", job.get("role") or "", re.I) for job in profiled),
+    str([job.get("role") for job in profiled][:4]),
+)
+check("jobs profile multi source", len({job.get("source") for job in profiled}) >= 2, str({job.get("source") for job in profiled}))
+profile_remember_report = {item.get("id"): item for item in body.get("sources") or []}.get("remember", {})
+if profile_remember_report.get("ok"):
+    check("jobs profile includes remember", any(job.get("source") == "remember" for job in profiled), str({job.get("source") for job in profiled}))
+    check(
+        "jobs profile remember urls",
+        all(re.search(r"/job/posting/\d+$", job["url"]) for job in profiled if job.get("source") == "remember"),
+        str([job["url"] for job in profiled if job.get("source") == "remember"][:2]),
+    )
+else:
+    check("jobs profile remember rate limit reported", "리멤버" in (profile_remember_report.get("note") or ""), str(profile_remember_report)[:160])
+check(
+    "jobs profile filter report",
+    filter_report.get("profile") == "seoul-inhouse-pr"
+    and isinstance(filter_report.get("raw"), int)
+    and filter_report.get("raw") >= filter_report.get("kept", 0)
+    and sum(excluded.get(key, 0) for key in ("region", "role", "junior", "agency")) > 0,
+    str(filter_report)[:200],
+)
+report_sources = {item.get("id"): item for item in body.get("sources") or []}
+check(
+    "jobs profile source notes",
+    all(report_sources.get(source, {}).get("note") for source in ("remember", "wanted", "saramin", "jobkorea")),
+    str(body.get("sources"))[:200],
+)
+status, body, _ = jobs_api(4383, {"profile": "seoul-inhouse-pr", "limit": 60, "detail": 8})
+check("jobs profile cache hit", status == 200 and body.get("cached") is True, str(body.get("cached")))
+status, body, _ = jobs_api(4383, {"profile": "no-such-profile", "q": "홍보", "limit": 24})
+check("jobs unknown profile falls back", status == 200 and body.get("filter") is None, str(body.get("filter")))
 
 status, body, _ = jobs_api(4383, raw=b"{not json")
 check("jobs bad body 400", status == 400 and (body.get("error") or {}).get("code") == "bad_body", f"{status} {str(body)[:120]}")
@@ -336,6 +419,16 @@ with sync_playwright() as p:
         page.wait_for_timeout(1200)
         check("auto count shown", int(page.inner_text("[data-testid=hub-count]")) >= 8, page.inner_text("[data-testid=hub-count]"))
         check("source pills", page.locator("[data-testid=collect-sources] .chip").count() >= 1, str(page.locator("[data-testid=collect-sources] .chip").count()))
+        check("default preset is seoul inhouse pr", page.get_attribute("[data-testid=preset-seoul-pr]", "aria-pressed") == "true", str(page.get_attribute("[data-testid=preset-seoul-pr]", "aria-pressed")))
+        check("filter note shown", page.locator("[data-testid=filter-note]").count() == 1, page.inner_text("[data-testid=collect-bar]")[:160])
+        note = page.inner_text("[data-testid=filter-note]") if page.locator("[data-testid=filter-note]").count() else ""
+        check("filter note counts", "제외" in note and int(page.get_attribute("[data-testid=filter-note]", "data-kept") or 0) >= 8, note[:160])
+        locations = page.evaluate("Array.from(document.querySelectorAll('[data-testid=hub-job]')).map(el => el.innerText)")
+        check("default feed seoul only", all("서울" in text for text in locations), str([text[:40] for text in locations if "서울" not in text][:2]))
+        check("company type badges", page.locator("[data-testid=company-type]").count() >= 1, str(page.locator("[data-testid=company-type]").count()))
+        sources_text = page.inner_text("[data-testid=collect-sources]")
+        notes_text = page.inner_text("[data-testid=source-notes]") if page.locator("[data-testid=source-notes]").count() else ""
+        check("default feed includes remember", "리멤버" in sources_text or "리멤버" in notes_text, sources_text[:160])
         check("detail opened", page.locator("[data-testid=hub-detail]").count() == 1)
         href = page.get_attribute("[data-testid=apply-link]", "href") or ""
         check("apply link is real url", href.startswith("https://"), href)

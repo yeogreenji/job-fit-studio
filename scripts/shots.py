@@ -46,14 +46,20 @@ with sync_playwright() as p:
     calm(page)
     page.screenshot(path=f"{OUT}/01-desktop-start.png")
 
-    # 여러 소스가 함께 모인 보드 (PR·홍보)
+    # 여러 소스가 함께 모인 보드 (PR·홍보 전체 — 에이전시 포함)
     page.click("[data-testid=preset-pr]")
+    page.wait_for_timeout(800)
+    page.wait_for_selector("[data-testid=collect-run]:not([disabled])", timeout=90000)
     deadline = time.time() + 90
     while time.time() < deadline:
         if page.locator("[data-testid=collect-sources] .chip").count() >= 2 and page.locator("[data-testid=hub-job]").count() >= 12:
             break
         page.wait_for_timeout(500)
     page.wait_for_timeout(1500)
+    card = page.locator("[data-testid=hub-job]", has_text="러쉬코리아").first
+    if card.count():
+        card.click()
+        page.wait_for_timeout(1200)
     calm(page)
     page.screenshot(path=f"{OUT}/02-desktop-jobs.png")
 

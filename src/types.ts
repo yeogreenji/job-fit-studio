@@ -53,6 +53,8 @@ export interface JobPosting {
   conditions?: string;
   /** full: 본문 요건까지 읽음 · list: 목록 정보만 */
   detailLevel?: "full" | "list";
+  /** 인하우스 / 서치펌(헤드헌팅) / 에이전시 구분 (자동 수집분) */
+  companyType?: "inhouse" | "agency" | "searchfirm" | "unknown";
 }
 
 export type KeywordStatus = "matched" | "weak" | "missing";
@@ -408,6 +410,8 @@ export interface JobPreset {
   /** 수집에 보낼 키워드. 비어 있으면 최신 공고 전체 */
   query: string;
   hint: string;
+  /** 서버가 적용할 기본 수집 타깃 프로필 (예: seoul-inhouse-pr) */
+  profile?: string;
 }
 
 /** 허브에 모은 공고 한 건 — 공고 원문 + 지원 상태 + 메모 + 지원 문구 */

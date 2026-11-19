@@ -31,6 +31,16 @@ export interface CollectedJob {
   applyUrl: string;
   detailLevel: "full" | "list";
   conditions: string;
+  companyType?: "inhouse" | "agency" | "searchfirm" | "unknown";
+}
+
+/** 프로필 수집에서 남긴 건수·걸린 건수 */
+export interface CollectFilter {
+  profile: string;
+  label: string;
+  raw: number;
+  kept: number;
+  excluded: { region: number; role: number; junior: number; agency: number };
 }
 
 export interface CollectSource {
@@ -51,6 +61,7 @@ export interface CollectResponse {
   fetchedAt: string;
   cached?: boolean;
   error?: { code?: string; message?: string };
+  filter?: CollectFilter;
 }
 
 export type CollectErrorCode = "server_unavailable" | "timeout" | "blocked" | "bad_response" | "unknown";
@@ -63,6 +74,10 @@ export interface CollectionState {
   keyword: string;
   /** 지금 보드에 채운 결과를 만든 키워드 */
   applied: string;
+  /** 적용한 수집 타깃 프로필 (없으면 빈 문자열) */
+  profile: string;
+  /** 프로필로 걸러 낸 결과 요약 */
+  filter: CollectFilter | null;
   region: string;
   sort: "latest" | "deadline";
   status: "idle" | "loading" | "ready" | "empty" | "error";
@@ -116,12 +131,16 @@ function normalizeJob(raw: unknown): CollectedJob | null {
     applyUrl,
     detailLevel: item.detailLevel === "full" ? "full" : "list",
     conditions: asString(item.conditions, 120),
+    companyType:
+      item.companyType === "inhouse" || item.companyType === "agency" || item.companyType === "searchfirm"
+        ? item.companyType
+        : "unknown",
   };
 }
 
 /** 서버에서 실제 공고를 받아 옵니다. */
 export async function requestJobs(
-  input: { query: string; limit?: number; detail?: number },
+  input: { query: string; limit?: number; detail?: number; profile?: string },
   timeoutMs = 40_000,
 ): Promise<CollectResponse> {
   const controller = new AbortController();
@@ -131,7 +150,12 @@ export async function requestJobs(
     response = await fetch(JOBS_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q: input.query, limit: input.limit ?? 36, detail: input.detail ?? 12 }),
+      body: JSON.stringify({
+        q: input.query,
+        limit: input.limit ?? 36,
+        detail: input.detail ?? 12,
+        ...(input.profile ? { profile: input.profile } : {}),
+      }),
       signal: controller.signal,
     });
   } catch (error) {
@@ -188,6 +212,28 @@ export async function requestJobs(
     fetchedAt: asString(payload.fetchedAt, 40) || new Date().toISOString(),
     cached: payload.cached === true,
     error: errorRecord.message ? { code: errorRecord.code, message: errorRecord.message } : undefined,
+    filter: normalizeFilter(payload.filter),
+  };
+}
+
+function normalizeFilter(raw: unknown): CollectFilter | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const item = raw as Record<string, unknown>;
+  const excluded = (item.excluded ?? {}) as Record<string, unknown>;
+  const countOf = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+  const label = asString(item.label, 60);
+  if (!label) return undefined;
+  return {
+    profile: asString(item.profile, 40),
+    label,
+    raw: countOf(item.raw),
+    kept: countOf(item.kept),
+    excluded: {
+      region: countOf(excluded.region),
+      role: countOf(excluded.role),
+      junior: countOf(excluded.junior),
+      agency: countOf(excluded.agency),
+    },
   };
 }
 
@@ -212,6 +258,7 @@ export function hubJobFromCollected(job: CollectedJob, fetchedAt: string): HubJo
     tags: job.tags,
     conditions: job.conditions,
     detailLevel: job.detailLevel,
+    companyType: job.companyType,
   };
   return {
     id: `auto-${job.source}-${job.sourceJobId}`,

@@ -3,12 +3,19 @@ import type { JobPreset } from "../types";
 /**
  * 첫 화면의 직무 프리셋.
  *
- * 프리셋을 고르면 그 키워드로 원티드·사람인·잡코리아를 한 번에 조회합니다.
+ * 프리셋을 고르면 그 키워드로 리멤버·원티드·사람인·잡코리아를 한 번에 조회합니다.
+ * `profile`이 붙은 프리셋은 서버가 그 타깃 조건(서울·인하우스·과차장급)으로 걸러 줍니다.
  * 비어 있는 query("전체")는 키워드 없이 최신 공고를 받아 옵니다.
  */
 export const JOB_PRESETS: JobPreset[] = [
-  { id: "all", label: "전체 최신", query: "", hint: "직무를 고르면 사람인·잡코리아까지 함께 모읍니다" },
-  { id: "pr", label: "PR·홍보", query: "홍보", hint: "보도자료·언론 대응·커뮤니케이션" },
+  {
+    id: "seoul-pr",
+    label: "서울 인하우스 PR(과차장급)",
+    query: "홍보",
+    hint: "서울 · 인하우스 · 홍보/PR · 경력 5년 이상만 남깁니다",
+    profile: "seoul-inhouse-pr",
+  },
+  { id: "pr", label: "PR·홍보 전체", query: "홍보", hint: "보도자료·언론 대응·커뮤니케이션 (에이전시 포함)" },
   { id: "marketing", label: "마케팅", query: "마케팅", hint: "퍼포먼스·그로스·CRM" },
   { id: "content", label: "콘텐츠", query: "콘텐츠", hint: "콘텐츠 기획·SNS·크리에이터" },
   { id: "brand", label: "브랜드", query: "브랜드", hint: "브랜드 마케팅·브랜딩" },
@@ -24,3 +31,6 @@ export const JOB_PRESETS: JobPreset[] = [
 export const CUSTOM_PRESET = "custom";
 
 export const presetById = (id: string): JobPreset | undefined => JOB_PRESETS.find((preset) => preset.id === id);
+
+/** 첫 화면에서 자동으로 모으는 기본 프리셋 */
+export const DEFAULT_PRESET = "seoul-pr";

@@ -1,12 +1,14 @@
 /**
  * GET /api/jobs?q=홍보&limit=36&detail=12   — 실제 채용 공고 자동 수집
  * POST /api/jobs { q, limit, detail }        — 같은 동작 (긴 키워드용)
+ * POST /api/jobs { profile: "seoul-inhouse-pr" } — 서울·인하우스·과차장급만 남기는 기본 수집
  *
- * 공개 사이트(원티드·사람인·잡코리아)의 공개 응답만 읽습니다. 로그인·키가 필요 없습니다.
- * 5분 캐시로 같은 조건의 반복 요청을 줄입니다.
+ * 공개 사이트(리멤버·원티드·사람인·잡코리아)의 공개 응답만 읽습니다. 로그인·키가 필요 없습니다.
+ * 10분 캐시로 같은 조건의 반복 요청을 줄입니다 (리멤버는 요청이 몰리면 잠시 막히므로 특히 중요).
  */
 
 import { CollectError, collectJobs, type CollectResult } from "./_collect.js";
+import { TARGET_PROFILES } from "./_target.js";
 
 type HeaderValue = string | string[] | undefined;
 
@@ -26,7 +28,7 @@ interface ApiResponse {
 
 const SERVICE = "jobfit-jobs";
 const VERSION = "1.0.0";
-const CACHE_TTL_MS = 5 * 60_000;
+const CACHE_TTL_MS = 10 * 60_000;
 const CACHE_MAX = 24;
 
 const CORS: Record<string, string> = {
@@ -122,13 +124,22 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     "";
   const limit = intOf(body.limit ?? url.searchParams.get("limit"), 36);
   const detail = intOf(body.detail ?? url.searchParams.get("detail"), 12);
+  const rawProfile =
+    (typeof body.profile === "string" ? body.profile : "") || url.searchParams.get("profile") || "";
+  const profile = rawProfile.trim() in TARGET_PROFILES ? rawProfile.trim() : "";
 
   if (url.searchParams.get("ping") === "1") {
-    send(res, 200, { ok: true, service: SERVICE, version: VERSION, sources: ["wanted", "saramin", "jobkorea"] });
+    send(res, 200, {
+      ok: true,
+      service: SERVICE,
+      version: VERSION,
+      sources: ["remember", "wanted", "saramin", "jobkorea"],
+      profiles: Object.keys(TARGET_PROFILES),
+    });
     return;
   }
 
-  const key = `${rawQuery.trim().toLowerCase()}|${limit}|${detail}`;
+  const key = `${profile}|${rawQuery.trim().toLowerCase()}|${limit}|${detail}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
     send(res, 200, { ...hit.result, cached: true, service: SERVICE, version: VERSION });
@@ -136,7 +147,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   }
 
   try {
-    const result = await collectJobs({ query: rawQuery, limit, detailLimit: detail });
+    const result = await collectJobs({ query: rawQuery, limit, detailLimit: detail, profile: profile || undefined });
     cache.set(key, { at: Date.now(), result });
     trimCache();
     if (!result.jobs.length) {

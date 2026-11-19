@@ -1,6 +1,6 @@
 # JobFit Studio — 공고는 알아서 모으고, 지원은 한 곳에서
 
-> **직무를 고르면 원티드·사람인·잡코리아에서 지금 올라온 실제 공고를 자동으로 모아 옵니다.**
+> **첫 화면에서 리멤버·원티드·사람인·잡코리아의 실제 공고를 모아, 서울 인하우스 홍보·PR 과차장급만 남깁니다.**
 > 카드를 고르면 저장해 둔 내 이력서로 만든 **한 줄 어필·지원서 초안**이 바로 나오고, **‘원문에서 지원하기’**로 실제 공고에 넘어가 지원합니다.
 > 지원 상태(지원 전 → 준비중 → 지원완료 → 서류합격 → 면접)와 메모도 같은 카드에서 관리합니다.
 
@@ -8,8 +8,8 @@
 
 공고 URL을 하나씩 찾아다니며 복사할 필요 없이, **직무/키워드만 고르면 보드가 실제 공고로 채워지고 지원 준비와 직접 지원까지 이어지는 커리어 허브**입니다.
 
-- **공고 자동 수집**: 첫 화면에서 바로 최신 공고를 모으고, 직무 프리셋(PR·홍보, 마케팅, 콘텐츠, 브랜드, 기획·전략, 디자인, 개발, 데이터, 영업, 경영지원)이나 직접 입력한 키워드로 다시 모읍니다. 원티드·사람인·잡코리아 세 곳을 한 번에 조회합니다.
-- **공고 원문에서 직접**: 회사·직무·경력·지역·마감일과 **원문 지원 링크**를 채용 사이트의 공개 응답에서 읽습니다. 원티드는 본문의 주요 업무·자격 요건·우대 사항까지, 사람인·잡코리아는 목록의 조건·직무 태그까지 읽고, 필요하면 카드에서 ‘원문에서 요건 읽어오기’로 본문을 더 채웁니다. 없는 항목은 만들지 않습니다.
+- **공고 자동 수집**: 첫 화면 프리셋 1순위가 **「서울 인하우스 PR(과차장급)」**입니다. 리멤버·원티드·사람인·잡코리아 네 곳을 여러 검색어로 한 번에 조회한 뒤, **서울·인하우스·홍보/PR·경력 5년 이상**만 남기고 지방·에이전시·신입·다른 직무 공고를 걸러 냅니다. 무엇이 몇 건 빠졌는지 화면에 그대로 표시합니다. 다른 직무 프리셋(PR·홍보 전체, 마케팅, 콘텐츠, 브랜드, 기획·전략, 디자인, 개발, 데이터, 영업, 경영지원)이나 직접 입력한 키워드로 다시 모을 수 있습니다.
+- **공고 원문에서 직접**: 회사·직무·경력·지역·마감일과 **원문 지원 링크**를 채용 사이트의 공개 응답에서 읽습니다. 리멤버·원티드는 담당 업무·자격 요건·우대 사항 본문까지, 사람인·잡코리아는 목록의 조건·직무 태그까지 읽고, 필요하면 카드에서 ‘원문에서 요건 읽어오기’로 본문을 더 채웁니다. 없는 항목은 만들지 않습니다.
 - **이력서는 1회 등록**: `.txt`/`.md`/`.pdf` 또는 직접 입력. 브라우저에 저장되어 모든 공고 카드에 재사용됩니다.
 - **지원 문구**: 규칙 엔진이 이력서 문장을 골라 한 줄 어필·지원서 3문단 초안·강조 경력 문장을 즉시 만들고, AI(Gemini `gemini-3.5-flash-lite`)가 연결되면 자동으로 한 번 더 다듬습니다. 원문에 없는 수치·회사명은 사후 검증에서 걸러냅니다.
 - **직접 지원**: 카드의 ‘원문에서 지원하기’가 실제 공고/지원 페이지를 새 탭으로 엽니다. 지원 후 상태를 바꾸고 메모를 남깁니다.
@@ -34,7 +34,8 @@
 
 | 영역 | 내용 |
 | --- | --- |
-| **공고 자동 수집** | `POST /api/jobs` — 원티드 `api/v4/jobs`(목록·키워드 검색)와 `api/v4/jobs/{id}`(본문 요건), 사람인 `zf_user/search`(목록), 잡코리아 `Search/`(목록)를 서버에서 직접 읽습니다. 세 곳을 동시에 조회하고, 한 곳이 막히거나 늦어도 나머지로 응답하며 소스별 건수를 표시합니다. 5분 캐시 |
+| **공고 자동 수집** | `POST /api/jobs` — 리멤버 `career-api.rememberapp.co.kr/job_postings/search`(본문 포함), 원티드 `api/v4/jobs`·`api/v4/jobs/{id}`, 사람인 `zf_user/search`, 잡코리아 `Search/`를 서버에서 직접 읽습니다. 네 곳을 동시에 조회하고, 한 곳이 막히거나 늦어도 나머지로 응답하며 소스별 건수를 표시합니다. 5분 캐시 |
+| **기본 타깃 프로필** | `profile: "seoul-inhouse-pr"`이면 검색어 6개(홍보·PR·언론홍보·기업PR·커뮤니케이션·대외협력)로 모은 뒤 **서울 · 인하우스 · 홍보/PR 직무 · 경력 5년 이상(과차장급)** 만 남깁니다. PR 에이전시·대행사는 빼고, 서치펌(헤드헌팅) 공고는 고용주가 공개되지 않아 별도 배지로 구분합니다. `filter`에 원본·유지·제외(지방/직무/신입·주니어/에이전시) 건수를 함께 돌려줍니다 |
 | **중복 제거** | 소스+공고번호, 그리고 회사·직무 조합으로 중복을 걸러 한 공고가 두 번 보이지 않습니다. 실제로 응답한 그대로만 보여 주고 없는 공고를 만들지 않습니다 |
 | **공고 파싱** | 원티드 본문의 `main_tasks`·`requirements`·`preferred_points`를 주요 업무·자격 요건·우대 사항으로, 사람인·잡코리아는 경력·학력·고용형태·급여·지역·직무 태그·마감을 목록에서 읽습니다. 목록만 읽은 공고는 카드에서 ‘원문에서 요건 읽어오기’(기존 URL 파서)로 본문을 채웁니다 |
 | **원문 지원 링크** | 공고마다 실제 주소(원티드 `/wd/{id}`, 사람인 `rec_idx`, 잡코리아 `GI_Read`)를 남깁니다. 수동 URL 수집은 페이지 앵커의 ‘지원하기·입사지원’ 링크를 점수화해 직접 지원 링크를 뽑고, 없으면 공고 URL을 씁니다. AI가 만든 링크는 받지 않습니다 |
@@ -54,8 +55,9 @@
 ## 3. 서버 (Vercel)
 
 ```
-api/jobs.ts         GET|POST /api/jobs — 실제 공고 자동 수집 (원티드·사람인·잡코리아)
+api/jobs.ts         GET|POST /api/jobs — 실제 공고 자동 수집 (리멤버·원티드·사람인·잡코리아)
 api/_collect.ts     수집기: 소스별 요청·파싱·중복 제거·소스 리포트 (Vercel 라우트 아님: `_` 접두사)
+api/_target.ts      기본 타깃 프로필 규칙: 서울·인하우스·홍보/PR·과차장급 판정과 에이전시/서치펌 구분
 api/analyze.ts      POST /api/analyze (mode: job_url | apply_kit | package | interview_eval | recommend), GET /api/analyze (상태 프로브)
 api/_joburl.ts      공고 URL fetch·HTML 텍스트 추출·문단 분리·지원 링크 추출 (Vercel 라우트 아님: `_` 접두사)
 vercel.json         build: npm run build → dist, functions.maxDuration 60s (analyze·jobs)
@@ -78,16 +80,20 @@ vercel.json         build: npm run build → dist, functions.maxDuration 60s (an
 
 ```
 GET  /api/jobs?ping=1
-→ { ok, service: "jobfit-jobs", version, sources: ["wanted","saramin","jobkorea"] }
+→ { ok, service: "jobfit-jobs", version, sources: ["remember","wanted","saramin","jobkorea"], profiles: ["seoul-inhouse-pr"] }
 
 GET  /api/jobs?q=홍보&limit=36&detail=12
+GET  /api/jobs?profile=seoul-inhouse-pr
 POST /api/jobs  { q: "홍보", limit: 36, detail: 12 }
+POST /api/jobs  { profile: "seoul-inhouse-pr", limit: 60, detail: 8 }
 → { ok, query, jobs: [{
-      id: "wanted:399106", source: "wanted", sourceName: "원티드", sourceJobId,
+      id: "remember:355613", source: "remember", sourceName: "리멤버", sourceJobId,
       company, role, employmentType, experience, location, deadline, salary, tags[],
       responsibilities, requirements, preferred, documents,
-      url, applyUrl, detailLevel: "full"|"list", conditions }],
+      url, applyUrl, detailLevel: "full"|"list", conditions,
+      companyType: "inhouse"|"searchfirm"|"agency", minYears, maxYears }],
     sources: [{ id, name, ok, count, full, ms, note? }],
+    filter?: { profile, label, raw, kept, excluded:{region,role,junior,agency} },
     fetchedAt, cached?, service, version }
 → 200 { ok:false, error:{ code:"no_result", message } }   조건에 맞는 공고 없음
 → 502 { ok:false, error:{ code:"sources_blocked", message } } 모든 소스 응답 실패
@@ -129,6 +135,7 @@ POST /api/analyze  { mode:"recommend", resume, priorityLabel?, apiKey?, model? }
 
 | 소스 | 엔드포인트 | 결과 |
 | --- | --- | --- |
+| 리멤버 | `career-api.rememberapp.co.kr/job_postings/search` (POST) | 200. 로그인 없이 검색어별 30건×2페이지(최대 93건), 담당 업무·자격 요건·우대 사항 본문 포함. 공고 원문 `career.rememberapp.co.kr/job/posting/{id}` |
 | 원티드 | `/api/v4/jobs`, `/api/v4/jobs/{id}` | 목록·키워드 검색·본문 요건 모두 200. 기본 24건, 본문 12건 상세 |
 | 사람인 | `/zf_user/search` | 목록 HTML 200. 회사·직무·경력·학력·고용형태·급여·지역·직무태그·마감 (상세 본문은 로그인 필요) |
 | 잡코리아 | `/Search/` | 목록 HTML 200. 회사·직무·경력·지역·직무태그 |
@@ -162,7 +169,7 @@ python3 scripts/make-pdf-fixture.py
 python3 scripts/shots.py      # docs/screenshots 재생성
 ```
 
-`scripts/e2e-server.mjs`가 `dist/`를 서빙하면서 실제 `api/analyze.ts`·`api/jobs.ts`를 esbuild로 실행합니다. 공고 자동 수집은 **실제 원티드·사람인·잡코리아 응답**을 그대로 검증하고, 수동 URL 수집 픽스처(`wanted.co.kr/wd/…`, `jobkorea.co.kr/Recruit/GI_Read/987654`)와 AI 응답만 스텁합니다. 픽스처의 인물·기업은 모두 가상입니다.
+`scripts/e2e-server.mjs`가 `dist/`를 서빙하면서 실제 `api/analyze.ts`·`api/jobs.ts`를 esbuild로 실행합니다. 공고 자동 수집은 **실제 리멤버·원티드·사람인·잡코리아 응답**을 그대로 검증하고, 수동 URL 수집 픽스처(`wanted.co.kr/wd/…`, `jobkorea.co.kr/Recruit/GI_Read/987654`)와 AI 응답만 스텁합니다. 픽스처의 인물·기업은 모두 가상입니다.
 
 ---
 
@@ -178,7 +185,7 @@ python3 scripts/shots.py      # docs/screenshots 재생성
 - 이력서·담은 공고·지원 문구·상태·메모·심층 패키지는 **브라우저 localStorage**에만 저장됩니다(담은 공고 60건, 패키지 20건). 자동 수집분은 담거나 상태·메모를 남겨야 저장됩니다.
 - 자동 수집은 **공개 목록/검색 응답**만 읽습니다. 사이트가 응답을 막거나 형식을 바꾸면 소스별 건수가 0으로 표시되고 나머지 소스로 동작합니다.
 - 사람인 상세 페이지 본문은 로그인 후 열려 자동 수집이 닿지 않습니다. 목록의 조건·직무 태그를 보여 주고 원문 확인을 안내합니다.
-- 지원 링크는 공개 공고 주소(원티드 `/wd/`, 사람인 `rec_idx`, 잡코리아 `GI_Read`)입니다. 공고가 앱 안에서만 지원을 받으면 공고 URL로 열립니다.
+- 지원 링크는 공개 공고 주소(리멤버 `/job/posting/{id}`, 원티드 `/wd/`, 사람인 `rec_idx`, 잡코리아 `GI_Read`)입니다. 리멤버 공고가 외부 지원 페이지를 쓰면 그 주소를 씁니다. 공고가 앱 안에서만 지원을 받으면 공고 URL로 열립니다.
 - AI는 입력 내용을 Gemini/OpenAI로 전송합니다. 실제 회사 기밀, 타인의 개인정보, 채용 사이트의 비공개 자료는 넣지 마세요.
 - 지원 문구는 **초안**입니다. 제출 전 모든 문장과 수치를 지원자가 직접 확인해야 하며, AI 출력은 수치·회사명 사후 검증을 거칩니다.
 - 적합도(심층 준비 화면)는 참고값이며 서류 통과를 보장하지 않습니다. **연봉 참고 범위는 추정**이고, 협상 문장에 들어가는 금액은 입력한 희망 연봉만 씁니다.
