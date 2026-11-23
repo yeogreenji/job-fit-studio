@@ -1,0 +1,176 @@
+{
+ "jobs": [
+  {
+   "id": "remember:1",
+   "source": "remember",
+   "sourceName": "리멤버",
+   "sourceJobId": "1",
+   "company": "노바커머스",
+   "role": "홍보 PR 과장",
+   "employmentType": "정규직",
+   "experience": "경력 7~10년",
+   "location": "서울 강남구",
+   "deadline": "2026-11-27",
+   "salary": "5,000~6,500만원",
+   "tags": [
+    "PR",
+    "홍보"
+   ],
+   "responsibilities": "보도자료 작성과 미디어 대응\n브랜드 캠페인 기획·실행\n위기 커뮤니케이션 대응",
+   "requirements": "경력 7년 이상\n언론 대응 실무 경험",
+   "preferred": "영어 커뮤니케이션, 퍼포먼스 캠페인",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/remember/1",
+   "applyUrl": "https://example.com/remember/1/apply",
+   "detailLevel": "full",
+   "conditions": "경력 7~10년 · 서울 강남구",
+   "companyType": "inhouse"
+  },
+  {
+   "id": "wanted:2",
+   "source": "wanted",
+   "sourceName": "원티드",
+   "sourceJobId": "2",
+   "company": "루멘스튜디오",
+   "role": "브랜드 커뮤니케이션 차장",
+   "employmentType": "정규직",
+   "experience": "경력 9년 이상",
+   "location": "서울 성동구",
+   "deadline": "2026-12-03",
+   "salary": "6,000만원 이상",
+   "tags": [
+    "브랜드",
+    "커뮤니케이션"
+   ],
+   "responsibilities": "브랜드 캠페인 총괄\nSNS 채널 운영\n콘텐츠 기획",
+   "requirements": "경력 9년 이상\n브랜드 커뮤니케이션 리드 경험",
+   "preferred": "위기관리 경험",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/wanted/2",
+   "applyUrl": "https://example.com/wanted/2/apply",
+   "detailLevel": "full",
+   "conditions": "경력 9년 이상 · 서울 성동구",
+   "companyType": "inhouse"
+  },
+  {
+   "id": "saramin:3",
+   "source": "saramin",
+   "sourceName": "사람인",
+   "sourceJobId": "3",
+   "company": "한빛제약",
+   "role": "대외협력 과장",
+   "employmentType": "정규직",
+   "experience": "경력 5~8년",
+   "location": "서울 서초구",
+   "deadline": "2026-12-10",
+   "salary": "4,800~5,600만원",
+   "tags": [
+    "대외협력"
+   ],
+   "responsibilities": "대외협력 및 대관 업무\n보도자료 작성\n미디어 모니터링",
+   "requirements": "경력 5년 이상\n대외협력 경험",
+   "preferred": "제약·바이오 이해",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/saramin/3",
+   "applyUrl": "https://example.com/saramin/3/apply",
+   "detailLevel": "full",
+   "conditions": "경력 5~8년 · 서울 서초구",
+   "companyType": "inhouse"
+  },
+  {
+   "id": "jobkorea:4",
+   "source": "jobkorea",
+   "sourceName": "잡코리아",
+   "sourceJobId": "4",
+   "company": "프레인",
+   "role": "PR AE",
+   "employmentType": "정규직",
+   "experience": "경력 3~6년",
+   "location": "서울 중구",
+   "deadline": "2026-11-26",
+   "salary": "3,800~4,600만원",
+   "tags": [
+    "PR"
+   ],
+   "responsibilities": "클라이언트 홍보 캠페인\n보도자료 배포",
+   "requirements": "경력 3년 이상",
+   "preferred": "에이전시 경험",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/jobkorea/4",
+   "applyUrl": "https://example.com/jobkorea/4/apply",
+   "detailLevel": "full",
+   "conditions": "경력 3~6년 · 서울 중구",
+   "companyType": "agency"
+  },
+  {
+   "id": "wanted:5",
+   "source": "wanted",
+   "sourceName": "원티드",
+   "sourceJobId": "5",
+   "company": "그린모빌리티",
+   "role": "홍보 인턴",
+   "employmentType": "정규직",
+   "experience": "신입",
+   "location": "서울 마포구",
+   "deadline": "2026-12-01",
+   "salary": "월 250만원",
+   "tags": [
+    "홍보"
+   ],
+   "responsibilities": "보도자료 초안 작성\nSNS 운영 보조",
+   "requirements": "신입",
+   "preferred": "홍보 관심",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/wanted/5",
+   "applyUrl": "https://example.com/wanted/5/apply",
+   "detailLevel": "full",
+   "conditions": "신입 · 서울 마포구",
+   "companyType": "inhouse"
+  },
+  {
+   "id": "remember:6",
+   "source": "remember",
+   "sourceName": "리멤버",
+   "sourceJobId": "6",
+   "company": "아르떼컬처",
+   "role": "커뮤니케이션 팀장",
+   "employmentType": "정규직",
+   "experience": "경력 12년 이상",
+   "location": "경기 성남시",
+   "deadline": "상시",
+   "salary": "7,000만원 이상",
+   "tags": [
+    "커뮤니케이션"
+   ],
+   "responsibilities": "커뮤니케이션 전략 수립\n위기관리 총괄",
+   "requirements": "경력 12년 이상",
+   "preferred": "조직 관리",
+   "documents": "이력서, 경력기술서, 자기소개서",
+   "url": "https://example.com/remember/6",
+   "applyUrl": "https://example.com/remember/6/apply",
+   "detailLevel": "full",
+   "conditions": "경력 12년 이상 · 경기 성남시",
+   "companyType": "inhouse"
+  }
+ ],
+ "profile": {
+  "role": "인하우스 PR·홍보",
+  "years": 8,
+  "keywords": [
+   "보도자료",
+   "위기관리",
+   "브랜드 PR",
+   "미디어 대응",
+   "퍼포먼스 캠페인"
+  ],
+  "salary": 5500,
+  "locations": [
+   "서울"
+  ],
+  "exclude": [
+   "인턴"
+  ],
+  "inhouseOnly": true,
+  "updatedAt": "2026-11-24T00:00:00.000Z"
+ }
+}

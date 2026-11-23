@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { ArrowLeft, ArrowUpRight, BarChart3, GitCompareArrows, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, BarChart3, Check, GitCompareArrows, Trash2, X } from "lucide-react";
 import type { JobPackage } from "../types";
-import { Card, Eyebrow, Meter, ScoreRing, SectionHead, cx, scoreColor } from "./ui";
+import { Card, Meter, ScoreRing, SectionHead, cx, scoreColor } from "./ui";
 
 const fmtDate = (iso: string) => {
   const d = new Date(iso);
@@ -41,8 +41,7 @@ export function HistoryView({
       <Card className="p-4">
         <div className="flex flex-wrap items-start gap-3">
           <div className="min-w-0">
-            <Eyebrow>Package history</Eyebrow>
-            <h1 className="mt-1 text-[18px] font-semibold tracking-[-0.03em]">지원 패키지 히스토리</h1>
+            <h1 className="text-[16px] font-semibold tracking-[-0.02em]">지원 패키지 히스토리</h1>
             <p className="mt-1 text-[11.5px] leading-relaxed text-muted">
               회사별로 만든 패키지의 적합도와 갭을 나란히 비교합니다. 최대 3건까지 선택할 수 있습니다.
             </p>
@@ -192,7 +191,7 @@ export function HistoryView({
                         picked ? "border-accent bg-accent text-white" : "border-line-strong bg-surface text-transparent hover:border-accent/50",
                       )}
                     >
-                      ✓
+                      <Check size={9} strokeWidth={3} />
                     </button>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
@@ -256,7 +255,7 @@ export function HistoryView({
             </Card>
 
             <Card className="p-4">
-              <Eyebrow>Reading</Eyebrow>
+              <span className="text-[9px] font-semibold uppercase tracking-[0.1em] text-faint">읽는 중</span>
               <h3 className="mt-1 text-[12.5px] font-semibold">어디에 지원할까</h3>
               <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted">
                 점수가 높아도 갭이 ‘자격 요건’에 몰려 있으면 서류에서 먼저 걸립니다. 점수와 미충족 키워드의 위치를 함께 보세요.

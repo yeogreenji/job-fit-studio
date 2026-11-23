@@ -1,4 +1,5 @@
-import type { AiConfig, ApplicationEntry, ApplyStatus, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
+import type { AiConfig, ApplicationEntry, ApplyStatus, CareerProfile, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
+import { EMPTY_PROFILE } from "./career";
 import { EMPTY_RESUME } from "./presets";
 import { isTrackedJob } from "./collect";
 
@@ -272,7 +273,7 @@ export function persistResumeMeta(meta: ResumeMeta) {
 
 /* ── 공고 수집·직접 지원 허브 ── */
 
-const APPLY_STATUS_VALUES: ApplyStatus[] = ["지원 전", "준비중", "지원완료", "서류합격", "면접"];
+const APPLY_STATUS_VALUES: ApplyStatus[] = ["지원 전", "준비중", "지원완료", "서류합격", "면접", "오퍼"];
 
 /** 허브에 모은 공고. 공고 원문·지원 링크·상태·메모·지원 문구를 이 브라우저에 저장합니다. */
 export function loadHubJobs(): HubJob[] {
@@ -319,4 +320,45 @@ export function resumeReady(resume: MasterResume): boolean {
 
 export function resumeBulletCount(resume: MasterResume): number {
   return resume.experiences.reduce((sum, exp) => sum + exp.bullets.filter((bullet) => bullet.text.trim().length > 5).length, 0);
+}
+
+/* ── 커리어 프로필 (적합도 기준) ── */
+
+const CAREER_KEY = "jobfit.career.v1";
+
+const stringsOf = (value: unknown, max: number): string[] =>
+  Array.isArray(value) ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean).slice(0, max) : [];
+
+/** 저장한 커리어 프로필. 저장한 적이 없으면 null (이력서 초안을 쓰지, 저장으로 치지 않습니다). */
+export function loadCareerProfile(): CareerProfile | null {
+  try {
+    const raw = localStorage.getItem(CAREER_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CareerProfile>;
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      ...EMPTY_PROFILE,
+      role: typeof parsed.role === "string" ? parsed.role.trim().slice(0, 60) : "",
+      summary: typeof parsed.summary === "string" ? parsed.summary.trim().slice(0, 200) : "",
+      years: typeof parsed.years === "number" && Number.isFinite(parsed.years) && parsed.years >= 0 ? Math.round(parsed.years) : null,
+      keywords: stringsOf(parsed.keywords, 12),
+      salary:
+        typeof parsed.salary === "number" && Number.isFinite(parsed.salary) && parsed.salary > 0 ? Math.round(parsed.salary) : null,
+      locations: stringsOf(parsed.locations, 6),
+      exclude: stringsOf(parsed.exclude, 12),
+      inhouseOnly: parsed.inhouseOnly === true,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+      origin: parsed.origin === "resume" ? "resume" : "manual",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function persistCareerProfile(profile: CareerProfile) {
+  try {
+    localStorage.setItem(CAREER_KEY, JSON.stringify(profile));
+  } catch {
+    /* ignore */
+  }
 }

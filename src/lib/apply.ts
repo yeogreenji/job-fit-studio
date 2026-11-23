@@ -9,7 +9,7 @@ import { findSourceSentence, guardText } from "./guard";
  * AI가 연결되면 같은 결과를 더 자연스러운 문장으로 다듬습니다(src/lib/ai.ts).
  */
 
-export const APPLY_STATUSES: ApplyStatus[] = ["지원 전", "준비중", "지원완료", "서류합격", "면접"];
+export const APPLY_STATUSES: ApplyStatus[] = ["지원 전", "준비중", "지원완료", "서류합격", "면접", "오퍼"];
 
 export const STATUS_CHIP: Record<ApplyStatus, string> = {
   "지원 전": "bg-paper-deep text-muted",
@@ -17,6 +17,7 @@ export const STATUS_CHIP: Record<ApplyStatus, string> = {
   지원완료: "bg-info-soft text-info",
   서류합격: "bg-accent-soft text-accent-deep",
   면접: "bg-ok-soft text-ok",
+  오퍼: "bg-[#efe7fb] text-[#5b3b9b]",
 };
 
 export const STATUS_DOT: Record<ApplyStatus, string> = {
@@ -25,6 +26,7 @@ export const STATUS_DOT: Record<ApplyStatus, string> = {
   지원완료: "#2f5f8a",
   서류합격: "#0e6a58",
   면접: "#16714f",
+  오퍼: "#5b3b9b",
 };
 
 /** 여러 줄 텍스트를 줄 단위 목록으로 (불릿·번호 제거) */

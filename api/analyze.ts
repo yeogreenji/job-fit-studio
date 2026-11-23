@@ -31,7 +31,7 @@ interface ApiResponse {
 }
 
 const SERVICE = "jobfit-analyze";
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 const MODES = ["package", "interview_eval", "job_url", "recommend", "apply_kit"] as const;
 type Mode = (typeof MODES)[number];
 const DEFAULT_MODEL = "gpt-4o-mini";
@@ -108,6 +108,23 @@ async function readBody(req: ApiRequest): Promise<Record<string, unknown> | null
 const str = (value: unknown, limit = FIELD_LIMIT): string => (typeof value === "string" ? value.replace(/\u0000/g, "").slice(0, limit).trim() : "");
 const strList = (value: unknown, limit = 24, itemLimit = 80): string[] =>
   Array.isArray(value) ? value.map((item) => str(item, itemLimit)).filter(Boolean).slice(0, limit) : [];
+
+/** 커리어 프로필(지원자가 찾는 자리)을 프롬프트 한 줄로. 값이 없으면 미입력. */
+const profileLine = (value: unknown): string => {
+  if (!value || typeof value !== "object") return "(미입력)";
+  const item = value as Record<string, unknown>;
+  const role = str(item.role, 60);
+  const years = typeof item.years === "number" && Number.isFinite(item.years) && item.years >= 0 ? Math.round(item.years) : null;
+  const keywords = strList(item.keywords, 10, 30);
+  const exclude = strList(item.exclude, 8, 30);
+  const parts = [
+    role ? `직무 ${role}` : "",
+    years !== null ? `경력 ${years}년` : "",
+    keywords.length ? `핵심 키워드 ${keywords.join(", ")}` : "",
+    exclude.length ? `제외 ${exclude.join(", ")}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : "(미입력)";
+};
 
 interface NormalizedJob {
   company: string;
@@ -189,7 +206,8 @@ const PACKAGE_SYSTEM = `[JOBFIT_PACKAGE] 당신은 한국 기업 채용에 맞�
 7. 각 질문의 answer는 지원자가 90초 안에 말할 수 있는 4~5문장 스크립트입니다. 원문 문장을 근거로 쓰고, 원문에 없는 수치·회사는 쓰지 않습니다.
    avoid는 그 질문에서 면접관을 잃는 답변 한 문장입니다.
 8. negotiation의 숫자는 [희망 연봉]에 주어진 값만 씁니다. 값이 없으면 금액 없이 조건 중심으로 씁니다.
-9. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장, 코드블록 표시를 붙이지 않습니다.
+9. [지원자가 찾는 자리]가 주어지면 강조점·자기소개 마무리·협상 관점에만 반영합니다. 그 조건에 맞추려고 지원자 경력에 없는 사실을 더하지 않습니다.
+10. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장, 코드블록 표시를 붙이지 않습니다.
 
 {
   "fit": {"verdict": "이 지원자의 적합성을 2문장으로", "onePoint": {"title": "12자 내외", "body": "이 공고에 넣을 때 강조할 원포인트 전략 2~3문장"}, "strengths": [{"label": "12자 내외", "why": "원문 근거"}], "gaps": [{"label": "공고의 미충족 요구", "how": "원문 범위에서 보완할 방법"}]},
@@ -243,6 +261,8 @@ ${job.tone || "(미입력)"}
 ${str(body.priorityLabel, 40) || "(미선택)"} — 이 우선순위를 자기소개 마무리와 처우 협상 문장에 반영하세요.
 [희망 연봉]
 ${typeof body.targetSalary === "number" && Number.isFinite(body.targetSalary) && body.targetSalary > 0 ? `${Math.round(body.targetSalary)}만원` : "(미입력 — 금액을 쓰지 말 것)"}
+[지원자가 찾는 자리 — 커리어 프로필]
+${profileLine(body.profile)}
 
 [내장 엔진 계산]
 적합도 ${typeof match.score === "number" ? match.score : "?"}/100 (${str(match.grade, 20) || "?"})

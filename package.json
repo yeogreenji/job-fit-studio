@@ -12,6 +12,7 @@
     "typecheck:app": "tsc --noEmit",
     "typecheck:api": "tsc -p tsconfig.api.json",
     "test:e2e": "python3 scripts/verify.py",
+    "test:ui": "python3 scripts/check-v2.py",
     "shots": "python3 scripts/shots.py",
     "test:pdf": "node scripts/test-pdf.mjs",
     "make:pdf": "python3 scripts/make-pdf-fixture.py"

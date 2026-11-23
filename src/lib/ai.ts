@@ -116,6 +116,14 @@ export async function probeAiServer(timeoutMs = 6000): Promise<ProbeResult> {
 
 const keyOf = (config: AiConfig): string | undefined => (config.sendKey && config.apiKey.trim() ? config.apiKey.trim() : undefined);
 
+/** AI에 넘기는 커리어 프로필 요약 (개인 식별 정보 없이 조건만) */
+export interface ProfileBrief {
+  role: string;
+  years: number | null;
+  keywords: string[];
+  exclude: string[];
+}
+
 export interface PackageRequestInput {
   job: JobPosting;
   resume: MasterResume;
@@ -123,6 +131,7 @@ export interface PackageRequestInput {
   config: AiConfig;
   priorityLabel?: string;
   targetSalary?: number | null;
+  profile?: ProfileBrief;
 }
 
 export interface AiPackageData {
@@ -148,6 +157,7 @@ export async function requestAiPackage(input: PackageRequestInput): Promise<{ mo
     model: config.model || undefined,
     priorityLabel: input.priorityLabel ?? "",
     targetSalary: typeof input.targetSalary === "number" && input.targetSalary > 0 ? input.targetSalary : undefined,
+    profile: input.profile,
     job: {
       company: job.company,
       role: job.role,

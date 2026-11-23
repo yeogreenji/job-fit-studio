@@ -1,4 +1,5 @@
 import type { HubJob, JobPosting } from "../types";
+import { parseYearsText } from "./fit";
 
 /**
  * 자동 공고 수집 클라이언트.
@@ -79,7 +80,15 @@ export interface CollectionState {
   /** 프로필로 걸러 낸 결과 요약 */
   filter: CollectFilter | null;
   region: string;
-  sort: "latest" | "deadline";
+  /** 경력 조건 필터 (전체 · 신입 · 1~4년 · 5~9년 · 10년↑) */
+  years: string;
+  /** 이 점수 이상만 보기 (0이면 전체) */
+  minFit: number;
+  /** 제외 키워드에 걸린 공고 숨기기 */
+  hideExcluded: boolean;
+  /** 켜 둔 수집처 (비어 있으면 전체) */
+  activeSources: string[];
+  sort: "latest" | "deadline" | "fit";
   status: "idle" | "loading" | "ready" | "empty" | "error";
   sources: CollectSource[];
   at: string | null;
@@ -310,7 +319,7 @@ export function mergeCollected(prev: HubJob[], collected: CollectedJob[], fetche
 
 /** 마감 문자열을 정렬용 숫자로. 모르는 값은 맨 뒤로 보냅니다. */
 export function deadlineRank(deadline: string): number {
-  const iso = deadline.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const iso = deadline.match(/^(\d{4})[-./](\d{2})[-./](\d{2})/);
   if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
   const monthDay = deadline.match(/(\d{1,2})\/(\d{1,2})/);
   if (monthDay) {
@@ -325,6 +334,89 @@ export function deadlineRank(deadline: string): number {
 }
 
 export const REGION_FILTERS = ["전체", "서울", "경기", "인천", "부산", "대구", "대전", "광주", "기타"] as const;
+
+export const YEAR_FILTERS = ["전체", "신입", "1~4년", "5~9년", "10년↑"] as const;
+
+/** 공고의 경력 표기를 연차 구간으로 */
+export function yearsBandOf(experience: string): string {
+  const years = parseYearsText(experience);
+  if (years.min === null && years.max === null) return "미확인";
+  const min = years.min ?? 0;
+  const max = years.max;
+  if (max !== null && max <= 1) return "신입";
+  if (min >= 10 || (max !== null && max >= 10 && min >= 10)) return "10년↑";
+  if (min >= 5) return "5~9년";
+  if (max !== null && max >= 10) return "5~9년";
+  return "1~4년";
+}
+
+/** 선택한 경력 구간에 공고가 걸리는지 — 구간이 겹치면 보여 줍니다. */
+export function matchesYears(experience: string, band: string): boolean {
+  if (!band || band === "전체") return true;
+  const years = parseYearsText(experience);
+  if (years.min === null && years.max === null) return false;
+  const min = years.min ?? 0;
+  const max = years.max ?? Number.POSITIVE_INFINITY;
+  const bands: Record<string, [number, number]> = {
+    "신입": [0, 1],
+    "1~4년": [1, 4],
+    "5~9년": [5, 9],
+    "10년↑": [10, Number.POSITIVE_INFINITY],
+  };
+  const range = bands[band];
+  if (!range) return true;
+  return min <= range[1] && max >= range[0];
+}
+
+/** 마감까지 남은 날 (D-day) — 색과 문구를 화면에서 그대로 씁니다. */
+export interface Dday {
+  label: string;
+  tone: "over" | "soon" | "ok" | "none";
+  days: number | null;
+}
+
+const localDayOf = (date: Date): number => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
+/** 마감 문자열을 날짜로. 읽지 못하면 null. */
+export function deadlineDate(deadline: string): Date | null {
+  if (!deadline) return null;
+  // 2026-12-20 · 2026.12.20 · 2026/12/20
+  const full = deadline.match(/(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})/);
+  if (full) {
+    const month = Number(full[2]);
+    const day = Number(full[3]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) return new Date(Number(full[1]), month - 1, day);
+  }
+  const monthDay = deadline.match(/(?:^|[^\d])(\d{1,2})\s*[\/.월]\s*(\d{1,2})(?:[^\d]|$)/);
+  if (monthDay) {
+    const now = new Date();
+    const month = Number(monthDay[1]);
+    const day = Number(monthDay[2]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      const year = month < now.getMonth() + 1 ? now.getFullYear() + 1 : now.getFullYear();
+      return new Date(year, month - 1, day);
+    }
+  }
+  if (/오늘\s*마감/.test(deadline)) return new Date();
+  if (/내일\s*마감/.test(deadline)) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow;
+  }
+  return null;
+}
+
+export function ddayOf(deadline: string): Dday {
+  if (!deadline) return { label: "마감 미확인", tone: "none", days: null };
+  if (/상시/.test(deadline)) return { label: "상시 채용", tone: "none", days: null };
+  const date = deadlineDate(deadline);
+  if (!date) return { label: deadline.slice(0, 10), tone: "none", days: null };
+  const days = Math.round((localDayOf(date) - localDayOf(new Date())) / 86_400_000);
+  if (days < 0) return { label: "마감 지남", tone: "over", days };
+  if (days === 0) return { label: "오늘 마감", tone: "soon", days };
+  if (days === 1) return { label: "내일 마감", tone: "soon", days };
+  return { label: `D-${days}`, tone: days <= 7 ? "soon" : "ok", days };
+}
 
 export function matchesRegion(location: string, region: string): boolean {
   if (!region || region === "전체") return true;

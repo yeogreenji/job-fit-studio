@@ -206,10 +206,12 @@ export function Toggle({
   checked,
   onChange,
   label,
+  testId,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   label?: string;
+  testId?: string;
 }) {
   return (
     <button
@@ -217,6 +219,7 @@ export function Toggle({
       role="switch"
       aria-checked={checked}
       aria-label={label}
+      data-testid={testId}
       onClick={() => onChange(!checked)}
       className={cx(
         "relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors",

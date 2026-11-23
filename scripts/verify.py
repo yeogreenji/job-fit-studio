@@ -209,6 +209,8 @@ JOB_PAYLOAD = {
     "tone": "작품과 사람을 먼저 보는 팀",
 }
 
+PLAN_PRO = {"plan": "pro", "trial": True, "startedAt": "2026-11-24T00:00:00.000Z", "expiresAt": "2026-12-08T00:00:00.000Z"}
+
 AI = "http://127.0.0.1:4383/"
 OFFLINE = "http://127.0.0.1:4384/"
 NOKEY = "http://127.0.0.1:4385/"
@@ -418,7 +420,7 @@ with sync_playwright() as p:
         check("auto collect runs on first screen", wait_count(page, "[data-testid=hub-job]", 8, 90000), str(page.locator("[data-testid=hub-job]").count()))
         page.wait_for_timeout(1200)
         check("auto count shown", int(page.inner_text("[data-testid=hub-count]")) >= 8, page.inner_text("[data-testid=hub-count]"))
-        check("source pills", page.locator("[data-testid=collect-sources] .chip").count() >= 1, str(page.locator("[data-testid=collect-sources] .chip").count()))
+        check("source pills", page.locator("[data-testid=collect-sources] button").count() >= 1, str(page.locator("[data-testid=collect-sources] button").count()))
         check("default preset is seoul inhouse pr", page.get_attribute("[data-testid=preset-seoul-pr]", "aria-pressed") == "true", str(page.get_attribute("[data-testid=preset-seoul-pr]", "aria-pressed")))
         check("filter note shown", page.locator("[data-testid=filter-note]").count() == 1, page.inner_text("[data-testid=collect-bar]")[:160])
         note = page.inner_text("[data-testid=filter-note]") if page.locator("[data-testid=filter-note]").count() else ""
@@ -439,6 +441,29 @@ with sync_playwright() as p:
 
     step("first screen", first_screen)
 
+    # ────────────────────────── 요금제 · 플랜 잠금 ──────────────────────────
+    def plans_and_pricing():
+        page.click("[data-testid=open-pricing]")
+        page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
+        check("pricing modal opens", page.locator("[data-testid=pricing-modal]").count() == 1)
+        check("pricing three plans", page.locator("[data-testid^=plan-card-]").count() == 3, str(page.locator("[data-testid^=plan-card-]").count()))
+        text = page.inner_text("[data-testid=pricing-modal]")
+        check("pricing prices", "19,900" in text and "49,000" in text, text[:160])
+        check("pricing free is current", page.get_attribute("[data-testid=plan-card-free]", "data-active") == "true")
+        check("pricing feature matrix", page.locator("[data-testid=pricing-matrix]").count() == 1)
+        check("pricing faq", page.locator("[data-testid=pricing-faq]").count() == 1)
+        check("pricing demo notice", "결제 연동 전" in text, text[:120])
+        check("pricing trial toggle off", page.get_attribute("[data-testid=plan-pro-trial]", "aria-checked") == "false")
+        page.click("[data-testid=plan-select-pro]")
+        page.wait_for_timeout(700)
+        stored = json.loads(page.evaluate("localStorage.getItem('jobfit.plan.v1')") or "{}")
+        check("pro trial activated", stored.get("plan") == "pro" and stored.get("trial") is True, json.dumps(stored)[:140])
+        check("pricing closed after select", page.locator("[data-testid=pricing-modal]").count() == 0)
+        check("plan badge shows pro", "Pro" in page.inner_text("[data-testid=open-pricing]"), page.inner_text("[data-testid=open-pricing]"))
+        check("no overflow after pricing", no_overflow(page))
+
+    step("plans and pricing", plans_and_pricing)
+
     # ────────────────────────── 프리셋·지역·정렬 ──────────────────────────
     def presets_and_filters():
         page.click("[data-testid=preset-pr]")
@@ -446,14 +471,18 @@ with sync_playwright() as p:
         check("preset pr collection", wait_count(page, "[data-testid=hub-job]", 10, 90000), str(page.locator("[data-testid=hub-job]").count()))
         deadline = time.time() + 40
         while time.time() < deadline:
-            if page.locator("[data-testid=collect-sources] .chip").count() >= 2:
+            if page.locator("[data-testid=collect-sources] button").count() >= 2:
                 break
             page.wait_for_timeout(400)
-        check("preset pr multi source", page.locator("[data-testid=collect-sources] .chip").count() >= 2, page.inner_text("[data-testid=collect-sources]")[:120])
+        check("preset pr multi source", page.locator("[data-testid=collect-sources] button").count() >= 2, page.inner_text("[data-testid=collect-sources]")[:120])
         sources = page.evaluate("Array.from(document.querySelectorAll('[data-testid=hub-job]')).map(el => el.dataset.source)")
         check("preset pr shows multiple sources", len(set(sources)) >= 2, str(set(sources)))
         check("preset pr matches keyword", "홍보" in page.inner_text("[data-testid=hub-detail]") or True)
 
+        if page.locator("[data-testid=filter-panel]").count() == 0:
+            page.click("[data-testid=filter-toggle]")
+            page.wait_for_timeout(300)
+        check("filter panel opens", page.locator("[data-testid=filter-panel]").count() == 1)
         page.select_option("[data-testid=collect-region]", "서울")
         page.wait_for_timeout(600)
         locations = page.evaluate(
@@ -518,6 +547,30 @@ with sync_playwright() as p:
         check("clipboard holds one liner", copied.strip() and copied.strip() != "EMPTY", repr(copied[:60]))
 
     step("resume and draft", resume_and_draft)
+
+    # ────────────────────────── Free 잠금 → Pro 해제 ──────────────────────────
+    def plan_lock_roundtrip():
+        page.evaluate("window.scrollTo(0, 0)")
+        page.click("[data-testid=open-pricing]")
+        page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
+        page.click("[data-testid=plan-select-free]")
+        page.wait_for_timeout(600)
+        stored = json.loads(page.evaluate("localStorage.getItem('jobfit.plan.v1')") or "{}")
+        check("back to free", stored.get("plan") == "free", json.dumps(stored)[:120])
+        page.locator("[data-testid=hub-kit]").scroll_into_view_if_needed()
+        page.wait_for_timeout(300)
+        page.click("[data-testid=kit-tab-negotiation]")
+        page.wait_for_timeout(300)
+        check("free kit negotiation locked", page.locator("[data-testid=kit-locked]").count() == 1)
+        check("free kit lock copy", "Pro" in page.inner_text("[data-testid=kit-locked]"), page.inner_text("[data-testid=kit-locked]")[:120])
+        page.click("[data-testid=kit-unlock]")
+        page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
+        page.click("[data-testid=plan-select-pro]")
+        page.wait_for_timeout(600)
+        check("pro unlocks negotiation", page.locator("[data-testid=kit-locked]").count() == 0 and page.locator("[data-testid=kit-negotiation]").count() == 1)
+        check("pro badge restored", "Pro" in page.inner_text("[data-testid=open-pricing]"))
+
+    step("plan lock roundtrip", plan_lock_roundtrip)
 
     # ────────────────────────── 담기 · 저장 · 트래커 ──────────────────────────
     def save_and_track():
@@ -749,6 +802,7 @@ with sync_playwright() as p:
         start_server("gemini", 4386)
         pb = p.chromium.launch()
         ctx6 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        ctx6.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(PLAN_PRO)))
         p6 = ctx6.new_page()
         attach(p6, "gemini")
         p6.goto(GEMINI, wait_until="domcontentloaded")

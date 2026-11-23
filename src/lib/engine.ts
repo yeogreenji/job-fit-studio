@@ -428,24 +428,54 @@ const APPEAL_TITLES: Record<string, string> = {
 };
 
 export function buildAppeals(resume: MasterResume, job: JobPosting, match: MatchResult): AppealItem[] {
-  const top = match.keywords
+  const ranked = match.keywords
     .filter((item) => item.status !== "missing" && APPEAL_TITLES[item.cluster])
     .sort((a, b) => b.weight * b.coverage - a.weight * a.coverage)
-    .slice(0, 3);
+    .slice(0, 6);
 
-  const appeals: AppealItem[] = top.map((item) => {
-    const exp = resume.experiences.find((e) => e.bullets.some((b) => item.evidence.some((ev) => ev.bulletId === b.id)));
-    const bullet = exp?.bullets.find((b) => item.evidence.some((ev) => ev.bulletId === b.id))?.text ?? "";
-    const short = bullet.length > 72 ? `${bullet.slice(0, 71).trimEnd()}…` : bullet;
+  // 같은 경력 문장을 두 번 인용하면 ‘3선’이 아니라 반복이 됩니다. 아직 안 쓴 문장을 먼저 고릅니다.
+  const usedBullets = new Set<string>();
+  const appeals: AppealItem[] = [];
+  for (const item of ranked) {
+    if (appeals.length >= 3) break;
+    const candidates = item.evidence
+      .map((evidence) => {
+        const exp = resume.experiences.find((e) => e.bullets.some((b) => b.id === evidence.bulletId));
+        const bullet = exp?.bullets.find((b) => b.id === evidence.bulletId)?.text ?? "";
+        return { exp, bullet, id: evidence.bulletId };
+      })
+      .filter((entry) => entry.bullet.trim().length > 8);
+    const picked = candidates.find((entry) => !usedBullets.has(entry.id)) ?? candidates[0];
+    if (!picked) continue;
+    usedBullets.add(picked.id);
+    const short = picked.bullet.length > 72 ? `${picked.bullet.slice(0, 71).trimEnd()}…` : picked.bullet;
     const quote = item.snippet.length > 58 ? `${item.snippet.slice(0, 57).trimEnd()}…` : item.snippet;
-    return {
+    appeals.push({
       id: `appeal-${item.cluster}`,
       title: APPEAL_TITLES[item.cluster],
-      body: `${job.company} ${job.role}의 ${item.sectionLabel} “${quote}”에 대해, ${exp ? `${exp.company}에서 ` : ""}${short}`,
+      body: `${job.company} ${job.role}의 ${item.sectionLabel} “${quote}”에 대해, ${picked.exp ? `${picked.exp.company}에서 ` : ""}${short}`,
       keywords: [item.label, ...item.evidence.slice(0, 2).map((e) => e.company).filter(Boolean)],
-      evidence: exp ? `${exp.company} · ${exp.role}` : "",
-    };
-  });
+      evidence: picked.exp ? `${picked.exp.company} · ${picked.exp.role}` : "",
+    });
+  }
+
+  // 키워드가 3개 미만으로 겹쳐도 빈자리를 남기지 않고, 아직 안 쓴 성과 문장으로 채웁니다.
+  if (appeals.length < 3) {
+    for (const exp of resume.experiences) {
+      for (const bullet of exp.bullets) {
+        if (appeals.length >= 3) break;
+        if (usedBullets.has(bullet.id) || bullet.text.trim().length < 10) continue;
+        usedBullets.add(bullet.id);
+        appeals.push({
+          id: `appeal-extra-${bullet.id}`,
+          title: "같은 기준으로 보여 줄 성과",
+          body: `${exp.company}에서 ${bullet.text}`,
+          keywords: [],
+          evidence: `${exp.company} · ${exp.role}`,
+        });
+      }
+    }
+  }
 
   if (!appeals.length) {
     const fallback = resume.experiences[0]?.bullets[0]?.text ?? "";

@@ -9,4 +9,15 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: { port: 5183, host: true },
   preview: { port: 4183, host: true },
+  build: {
+    // 화면 코드와 라이브러리를 나눠 첫 로딩과 캐시를 개선합니다.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
+  },
 });

@@ -305,6 +305,8 @@ export interface AiFit {
 export interface JobPackage {
   id: string;
   createdAt: string;
+  /** 어느 허브 공고에서 만든 패키지인지 (지원 패키지 미리보기와 연결) */
+  hubJobId?: string;
   company: string;
   role: string;
   employmentType: string;
@@ -383,10 +385,81 @@ export interface ApplicationEntry {
 export type TabId = "match" | "rewrite" | "interview" | "pitch" | "export";
 export type ViewId = "studio" | "history" | "tracker";
 
+/* ── 커리어 프로필 · 적합도 ── */
+
+/**
+ * 사용자가 저장한 커리어 프로필. 공고마다 같은 기준으로 적합도를 계산합니다.
+ * (이력서와 별개로 ‘지금 찾는 자리’의 조건을 적어 두는 곳입니다)
+ */
+export interface CareerProfile {
+  /** 대표 직무 (예: 인하우스 PR·홍보) */
+  role: string;
+  /** 한 줄 경력 요약 — 이력서에서 채우거나 직접 고칩니다 */
+  summary?: string;
+  /** 경력 연차 */
+  years: number | null;
+  /** 핵심 성과·키워드 (예: 보도자료, 위기관리, 브랜드 PR) */
+  keywords: string[];
+  /** 희망 연봉 (만원) */
+  salary: number | null;
+  /** 선호 지역 (예: 서울) */
+  locations: string[];
+  /** 제외 키워드 — 공고에 있으면 크게 감점합니다 */
+  exclude: string[];
+  /** 인하우스만 보고 싶은지 */
+  inhouseOnly: boolean;
+  updatedAt: string;
+  /** 이력서에서 자동으로 채운 프로필인지 (화면에서 출처를 구분합니다) */
+  origin?: "manual" | "resume";
+}
+
+/* ── 요금제 ── */
+
+export type PlanId = "free" | "pro" | "pass";
+
+/** 이 브라우저에 저장된 요금제 상태. 결제 연동 전에는 데모 활성화로만 바뀝니다. */
+export interface PlanState {
+  plan: PlanId;
+  /** 무료 체험(데모)으로 열린 Pro인지 */
+  trial: boolean;
+  startedAt: string;
+  expiresAt: string | null;
+}
+
+export type FitTone = "high" | "mid" | "low" | "bad";
+
+/** 적합도 계산의 한 항목 — 왜 이 점수가 나왔는지 화면에 그대로 보여 줍니다. */
+export interface FitPart {
+  id: "role" | "years" | "keywords" | "place" | "salary";
+  label: string;
+  /** 이 항목이 차지하는 비중 (0~1, 계산에 쓰인 항목만 합이 1) */
+  weight: number;
+  score: number;
+  note: string;
+  /** 프로필에 값이 없어 계산에서 뺀 항목 */
+  available: boolean;
+}
+
+export interface FitResult {
+  score: number;
+  label: string;
+  tone: FitTone;
+  parts: FitPart[];
+  /** 프로필 키워드 중 공고에 있는 것 */
+  matched: string[];
+  /** 프로필 키워드 중 공고에 없는 것 */
+  missing: string[];
+  /** 제외 키워드에 걸린 것 */
+  excluded: string[];
+  reasons: string[];
+  /** 프로필이 없어 계산하지 못했는지 */
+  needsProfile: boolean;
+}
+
 /* ── 공고 수집·직접 지원 허브 ── */
 
 /** 지원 상태 — 허브 카드에서 바로 바꿉니다. */
-export type ApplyStatus = "지원 전" | "준비중" | "지원완료" | "서류합격" | "면접";
+export type ApplyStatus = "지원 전" | "준비중" | "지원완료" | "서류합격" | "면접" | "오퍼";
 
 /** 저장된 이력서로 만든 복붙용 지원 문구 묶음 */
 export interface ApplyDraft {

@@ -1,5 +1,5 @@
 import type { AiConfig, AiFit, InterviewQuestion, JobPackage, NegotiationPlan, OnePoint, QuestionCategory, ReverseQuestion, ReverseTone } from "../types";
-import { requestAiPackage } from "./ai";
+import { requestAiPackage, type ProfileBrief } from "./ai";
 import { guardIntro, guardText, findSourceSentence } from "./guard";
 import { priorityOf } from "./priority";
 
@@ -38,7 +38,7 @@ export interface EnrichResult {
  * AI 결과를 내장 엔진 패키지에 합칩니다.
  * 원문에 없는 수치·회사명이 섞인 항목은 버리고 경고로 남깁니다.
  */
-export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<EnrichResult> {
+export async function enrichWithAi(pkg: JobPackage, config: AiConfig, profile?: ProfileBrief): Promise<EnrichResult> {
   const option = priorityOf(pkg.priority);
   const targetSalary = typeof pkg.targetSalary === "number" && pkg.targetSalary > 0 ? pkg.targetSalary : null;
   const { data, model } = await requestAiPackage({
@@ -48,6 +48,7 @@ export async function enrichWithAi(pkg: JobPackage, config: AiConfig): Promise<E
     config,
     priorityLabel: option?.label ?? "",
     targetSalary,
+    profile,
   });
   const sources = resumeSources(pkg);
   const warnings: string[] = [];

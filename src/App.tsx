@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Upload, X } from "lucide-react";
-import type { AiConfig, AiStatus, HubJob, InterviewFeedback, JobPackage, MasterResume, PriorityId, ViewId } from "./types";
+import type { AiConfig, AiStatus, CareerProfile, HubJob, InterviewFeedback, JobPackage, MasterResume, PlanId, PlanState, PriorityId, ViewId } from "./types";
 import { SAMPLE_RESUMES } from "./lib/presets";
-import { analyze } from "./lib/engine";
 import { enrichWithAi } from "./lib/enrich";
 import { AiError, probeAiServer, requestAiApplyKit } from "./lib/ai";
-import { buildLocalIntro, buildLocalReverse } from "./lib/coach";
-import { buildLocalAnswerSet, buildLocalNegotiation, buildLocalOnePoint } from "./lib/priority";
+import { buildLocalAnswerSet } from "./lib/priority";
 import { buildMarkdown, downloadText, slugForFile } from "./lib/report";
 import { guessKind, buildPreview, readFileText } from "./lib/import";
 import { extractPdfText } from "./lib/pdf";
 import { applySources, buildLocalApplyKit, mergeAiApplyKit } from "./lib/apply";
+import { mergeProfileFromResume, profileFromResume, profileIsSet } from "./lib/career";
+import { activatePass, activateTrial, deactivatePlan, featuresOf, loadPlan, persistPlan } from "./lib/plan";
+import { scoreFit } from "./lib/fit";
+import { buildLocalPackage } from "./lib/package";
 import { fetchMany, hubJobFromOutcome, hubJobFromPaste, splitJobUrls, urlKey, type AddProgress } from "./lib/hub";
 import { fetchJobFromUrl } from "./lib/jobUrl";
 import { CollectError, isTrackedJob, mergeCollected, requestJobs, type CollectionState } from "./lib/collect";
@@ -19,12 +21,14 @@ import {
   addPackage,
   clearPackages,
   loadAiConfig,
+  loadCareerProfile,
   loadHubJobs,
   loadPackages,
   loadPrefs,
   loadResume,
   loadResumeMeta,
   persistAiConfig,
+  persistCareerProfile,
   persistHubJobs,
   persistPrefs,
   persistResume,
@@ -42,6 +46,8 @@ import { ResultFlow } from "./components/ResultFlow";
 import { TrackerView } from "./components/TrackerView";
 import { HistoryView } from "./components/HistoryView";
 import { AiSettingsModal } from "./components/AiSettingsModal";
+import { CareerProfileModal } from "./components/CareerProfileModal";
+import { PricingModal } from "./components/PricingModal";
 import { PrintSheet } from "./components/PrintSheet";
 import { cx } from "./components/ui";
 
@@ -72,6 +78,10 @@ export default function App() {
     profile: "",
     filter: null,
     region: "전체",
+    years: "전체",
+    minFit: 0,
+    hideExcluded: true,
+    activeSources: [],
     sort: "latest",
     status: "idle",
     sources: [],
@@ -90,10 +100,18 @@ export default function App() {
   const [savedSignal, setSavedSignal] = useState(0);
 
   const [prefs, setPrefs] = useState(() => loadPrefs());
+  const [savedProfile, setSavedProfile] = useState<CareerProfile | null>(() => loadCareerProfile());
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [plan, setPlan] = useState<PlanState>(() => loadPlan());
+  const [pricingOpen, setPricingOpen] = useState(false);
+  const features = useMemo(() => featuresOf(plan), [plan]);
   const [pkg, setPkg] = useState<JobPackage | null>(null);
   const [saved, setSaved] = useState<JobPackage[]>(() => loadPackages());
   const [deepBusyId, setDeepBusyId] = useState<string | null>(null);
   const [regenerating, setRegenerating] = useState(false);
+  const [aiKit, setAiKit] = useState<{ hubJobId: string; pkg: JobPackage } | null>(null);
+  const [kitBusy, setKitBusy] = useState(false);
+  const [printPkg, setPrintPkg] = useState<JobPackage | null>(null);
 
   const [aiConfig, setAiConfig] = useState<AiConfig>(() => loadAiConfig());
   const [aiStatus, setAiStatus] = useState<AiStatus>(INITIAL_STATUS);
@@ -258,11 +276,20 @@ export default function App() {
           "warn",
         );
       } else {
+        const tracked = jobsRef.current.filter((job) => isTrackedJob(job)).length;
+        if (Number.isFinite(features.pipelineLimit) && tracked >= features.pipelineLimit) {
+          setPricingOpen(true);
+          notify(
+            `Free 플랜은 담은 공고 ${features.pipelineLimit}건까지입니다. Pro에서 무제한 추적으로 열립니다.`,
+            "warn",
+          );
+          return;
+        }
         patchJob(id, (job) => ({ ...job, saved: true }));
         notify(`${target.job.company || "공고"}를 내 지원에 담았습니다.`);
       }
     },
-    [notify, patchJob],
+    [features.pipelineLimit, notify, patchJob],
   );
 
   /** 목록 정보만 있는 공고의 요건을 원문에서 읽어 채웁니다. */
@@ -330,16 +357,19 @@ export default function App() {
 
   const importResumeFile = useCallback(
     async (file: File) => {
-      setResumeBusy(file.name.toLowerCase().endsWith(".pdf") ? "PDF에서 글자를 읽는 중" : "이력서 파일을 읽는 중");
+      const isPdf = file.name.toLowerCase().endsWith(".pdf");
+      setResumeBusy(isPdf ? "PDF에서 글자를 읽는 중" : "이력서 파일을 읽는 중");
       try {
         let text = "";
-        if (file.name.toLowerCase().endsWith(".pdf")) {
+        let pdfNote = "";
+        if (isPdf) {
           const result = await extractPdfText(await file.arrayBuffer());
           if (!result.ok) {
             notify(`${result.reason ?? "PDF를 읽지 못했습니다"} PDF 대신 .txt/.md로 저장해 올리거나 ‘직접 입력’을 사용하세요.`, "err");
             return;
           }
           text = result.text;
+          pdfNote = `${result.pages}쪽 · ${text.replace(/\s/g, "").length.toLocaleString("ko-KR")}자`;
         } else {
           text = await readFileText(file);
         }
@@ -352,41 +382,68 @@ export default function App() {
         if (kind === "job") {
           notify("이 파일은 공고처럼 보입니다. 공고는 위 ‘공고 모으기’ 칸에 URL이나 본문으로 넣어 주세요.", "warn");
         }
+
+        /** 이력서에서 확인되는 값만으로 커리어 프로필을 채웁니다 (이미 넣은 값은 그대로). */
+        const merged = kind === "resume" ? mergeProfileFromResume(savedProfile, parsed.resume) : null;
+        if (merged?.filled.length) {
+          setSavedProfile(merged.profile);
+          persistCareerProfile(merged.profile);
+        }
+        const profileNote = merged?.filled.length ? ` 프로필 자동 채움 — ${merged.filled.join(" · ")}.` : "";
+
         const bullets = resumeBulletCount(parsed.resume);
         if (bullets === 0) {
-          applyResume(parsed.resume, { source: "file", fileName: file.name, savedAt: new Date().toISOString(), note: "문장을 찾지 못함" });
+          applyResume(parsed.resume, { source: "file", fileName: file.name, savedAt: new Date().toISOString(), note: pdfNote || "문장을 찾지 못함" });
           setResumeOpen(true);
-          notify("경력 문장을 나누지 못했습니다. 편집 창에서 회사·직함과 문장을 확인해 주세요.", "warn");
+          notify(`경력 문장을 나누지 못했습니다. 편집 창에서 회사·직함과 문장을 확인해 주세요.${profileNote}`, "warn");
           return;
         }
         applyResume(parsed.resume, {
           source: "file",
           fileName: file.name,
           savedAt: new Date().toISOString(),
-          note: `${parsed.summary}${parsed.warnings.length ? ` · ${parsed.warnings[0]}` : ""}`,
+          note: [pdfNote, parsed.summary, parsed.warnings.length ? parsed.warnings[0] : ""].filter(Boolean).join(" · "),
         });
         setResumeOpen(false);
-        notify(`이력서를 저장했습니다 — 경력 ${parsed.resume.experiences.length}개 · 문장 ${bullets}개`, parsed.warnings.length ? "warn" : "ok");
+        notify(
+          `이력서를 저장했습니다 — 경력 ${parsed.resume.experiences.length}개 · 문장 ${bullets}개.${profileNote}`,
+          parsed.warnings.length ? "warn" : "ok",
+        );
       } catch {
         notify("파일을 읽지 못했습니다. .txt/.md/.pdf인지 확인해 주세요.", "err");
       } finally {
         setResumeBusy(null);
       }
     },
-    [applyResume, notify],
+    [applyResume, notify, savedProfile],
   );
 
   const useSampleResume = useCallback(() => {
     const sample = SAMPLE_RESUMES[0];
     applyResume(sample, { source: "sample", savedAt: new Date().toISOString(), note: "가상 인물 샘플" });
+    const merged = mergeProfileFromResume(savedProfile, sample);
+    if (merged.filled.length) {
+      setSavedProfile(merged.profile);
+      persistCareerProfile(merged.profile);
+    }
     setResumeOpen(false);
-    notify("가상 인물 ‘서하늘’ 샘플을 넣었습니다. 실제 지원 전에 내 이력서로 바꿔 주세요.", "warn");
-  }, [applyResume, notify]);
+    notify(
+      `가상 인물 ‘서하늘’ 샘플을 넣었습니다.${merged.filled.length ? ` 프로필 자동 채움 — ${merged.filled.join(" · ")}.` : ""} 실제 지원 전에 내 이력서로 바꿔 주세요.`,
+      "warn",
+    );
+  }, [applyResume, notify, savedProfile]);
 
   /* ── 지원 문구 (AI 다듬기) ── */
 
   const refineDraft = useCallback(
     async (job: HubJob, manual = false) => {
+      if (!features.aiRefine) {
+        if (manual) {
+          notify("AI 문장 다듬기는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+          setPricingOpen(true);
+        }
+        return;
+      }
       const local = job.draft ?? buildLocalApplyKit(resume, job.job);
       const sources = applySources(resume, job.job);
       const bullets = resume.experiences.flatMap((exp) => exp.bullets.map((bullet) => bullet.text));
@@ -417,10 +474,159 @@ export default function App() {
         setAiDraftBusyId(null);
       }
     },
-    [aiConfig, notify, patchJob, resume],
+    [aiConfig, features.aiRefine, notify, patchJob, resume],
   );
 
   const selected = useMemo(() => hubJobs.find((job) => job.id === selectedId) ?? hubJobs[0] ?? null, [hubJobs, selectedId]);
+
+  /* ── 커리어 프로필 · 적합도 ── */
+
+  /** 협상 스크립트에 쓸 희망 연봉 — 직접 넣은 값이 우선, 없으면 프로필의 희망 연봉. */
+  const targetSalary = prefs.targetSalary ?? savedProfile?.salary ?? null;
+
+  /** 저장한 프로필이 없으면 이력서에서 확인되는 값만으로 초안을 씁니다. */
+  const profile = useMemo(
+    () => savedProfile ?? profileFromResume(resume, targetSalary),
+    [resume, savedProfile, targetSalary],
+  );
+  /** AI 프롬프트에 넘길 프로필 요약 (이름·연락처 없이 조건만) */
+  const profileBrief = useMemo(
+    () => ({ role: profile.role, years: profile.years, keywords: profile.keywords, exclude: profile.exclude }),
+    [profile],
+  );
+
+  const fits = useMemo(() => {
+    const active = profileIsSet(profile) ? profile : null;
+    const map: Record<string, ReturnType<typeof scoreFit>> = {};
+    for (const job of hubJobs) map[job.id] = scoreFit(active, job.job);
+    return map;
+  }, [hubJobs, profile]);
+
+  const saveProfile = useCallback(
+    (next: CareerProfile) => {
+      setSavedProfile(next);
+      persistCareerProfile(next);
+      setProfileOpen(false);
+      if (next.salary !== null) setPrefs((prev) => ({ ...prev, targetSalary: next.salary }));
+      setAiKit(null);
+      notify(
+        profileIsSet(next)
+          ? `${next.keywords.length}개 키워드 · ${next.years !== null ? `경력 ${next.years}년` : "연차 미입력"} 기준으로 공고 ${hubJobs.length}건의 적합도를 다시 계산했습니다.`
+          : "프로필을 저장했습니다. 직무·키워드를 넣으면 적합도가 계산됩니다.",
+        profileIsSet(next) ? "ok" : "warn",
+      );
+    },
+    [hubJobs.length, notify],
+  );
+
+  /* ── 요금제 (결제 연동 전 데모) ── */
+
+  const openPricing = useCallback(() => setPricingOpen(true), []);
+
+  const choosePlan = useCallback(
+    (id: PlanId) => {
+      if (id === "free") {
+        const next = deactivatePlan();
+        setPlan(next);
+        persistPlan(next);
+        notify("Free 플랜입니다. 담은 공고·이력서·프로필은 그대로 남습니다.", "warn");
+      } else {
+        const next = id === "pass" ? activatePass() : activateTrial();
+        setPlan(next);
+        persistPlan(next);
+        notify(
+          id === "pass"
+            ? "3개월 이직 패스(데모)를 켰습니다 — 90일 동안 지원 패키지 4종·AI 다듬기·무제한 파이프라인이 열립니다."
+            : "Pro 무료 체험(14일)을 켰습니다 — 지원 패키지 4종·AI 다듬기·무제한 파이프라인이 열렸습니다.",
+        );
+      }
+      setPricingOpen(false);
+    },
+    [notify],
+  );
+
+  const toggleTrial = useCallback(
+    (on: boolean) => {
+      const next = on ? activateTrial() : deactivatePlan();
+      setPlan(next);
+      persistPlan(next);
+      notify(
+        on ? "Pro 무료 체험(14일)을 켰습니다 — 결제 없이 이 브라우저에서만 열립니다." : "Pro 체험을 껐습니다. Free로 돌아갑니다.",
+        on ? "ok" : "warn",
+      );
+    },
+    [notify],
+  );
+
+  /* ── 지원 패키지 (공고 한 건, 규칙으로 즉시) ── */
+
+  const localKit = useMemo(() => {
+    if (!selected || !resumeReady(resume)) return null;
+    return buildLocalPackage({
+      resume,
+      job: selected.job,
+      source: selected.source,
+      priority: prefs.priority ?? undefined,
+      targetSalary,
+      hubJobId: selected.id,
+    });
+  }, [prefs.priority, resume, selected, targetSalary]);
+
+  useEffect(() => {
+    setAiKit(null);
+  }, [selected?.id, prefs.priority, targetSalary, resume]);
+
+  const kit = aiKit && selected && aiKit.hubJobId === selected.id ? aiKit.pkg : localKit;
+
+  const refineKit = useCallback(async () => {
+    if (!kit) return;
+    if (!features.aiRefine) {
+      notify("AI로 다듬기는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+      setPricingOpen(true);
+      return;
+    }
+    setKitBusy(true);
+    try {
+      const enriched = await enrichWithAi(kit, aiConfig, profileBrief);
+      const next: JobPackage = {
+        ...enriched.pkg,
+        hubJobId: kit.hubJobId,
+        questions: buildLocalAnswerSet(enriched.pkg.questions, kit.resumeSnapshot, kit.jobSnapshot),
+      };
+      setAiKit({ hubJobId: kit.hubJobId ?? "", pkg: next });
+      notify(
+        enriched.warnings.length
+          ? `지원 패키지를 AI로 다듬었습니다 — 근거가 확인되지 않은 항목 ${enriched.warnings.length}건은 규칙 문장으로 두었습니다.`
+          : "지원 패키지를 AI로 다듬었습니다.",
+        enriched.warnings.length ? "warn" : "ok",
+      );
+    } catch (error) {
+      if (error instanceof AiError && error.code === "no_key") {
+        setAiStatus((prev) => ({ ...prev, kind: "local", reason: "no_key", message: "서버에 API 키가 없습니다" }));
+      }
+      notify(`${error instanceof Error ? error.message : "AI 호출에 실패했습니다"} — 규칙 문장을 유지합니다.`, "warn");
+    } finally {
+      setKitBusy(false);
+    }
+  }, [aiConfig, features.aiRefine, kit, notify, profileBrief]);
+
+  const exportKit = useCallback(() => {
+    if (!kit) return;
+    downloadText(slugForFile(kit.company, kit.createdAt), buildMarkdown(kit));
+    notify("지원 패키지를 Markdown으로 내려받았습니다.");
+  }, [kit, notify]);
+
+  const printKit = useCallback(() => {
+    if (!kit) return;
+    setPrintPkg(kit);
+    window.setTimeout(() => window.print(), 160);
+  }, [kit]);
+
+  useEffect(() => {
+    const clear = () => setPrintPkg(null);
+    window.addEventListener("afterprint", clear);
+    return () => window.removeEventListener("afterprint", clear);
+  }, []);
 
   /** 수집 결과가 바뀌어 고른 공고가 사라지면, 새로 모인 첫 공고를 고릅니다. */
   useEffect(() => {
@@ -440,8 +646,8 @@ export default function App() {
     if (selected.draft) return;
     const local = buildLocalApplyKit(resume, selected.job);
     patchJob(selected.id, (job) => ({ ...job, draft: local }));
-    if (aiStatus.kind === "live") void refineDraft({ ...selected, draft: local });
-  }, [aiStatus.kind, patchJob, refineDraft, resume, selected]);
+    if (aiStatus.kind === "live" && features.aiRefine) void refineDraft({ ...selected, draft: local });
+  }, [aiStatus.kind, features.aiRefine, patchJob, refineDraft, resume, selected]);
 
   /* ── 공고 모으기 ── */
 
@@ -533,6 +739,11 @@ export default function App() {
 
   const openDeep = useCallback(
     async (hubJob: HubJob) => {
+      if (!features.deepPrep) {
+        notify("90초 면접 연습과 심층 준비는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+        setPricingOpen(true);
+        return;
+      }
       if (!resumeReady(resume)) {
         notify("내 이력서를 먼저 등록해 주세요.", "warn");
         setResumeOpen(true);
@@ -546,40 +757,19 @@ export default function App() {
       }
       setDeepBusyId(hubJob.id);
       try {
-        const result = analyze(resume, job);
-        const base: JobPackage = {
-          id: `pkg-${Date.now().toString(36)}`,
-          createdAt: new Date().toISOString(),
-          company: job.company.trim() || "회사 미확인",
-          role: job.role.trim() || "직무 미확인",
-          employmentType: job.employmentType,
-          location: job.location,
-          resumeName: resume.name,
-          resumeHeadline: resume.headline,
-          years: resume.years,
-          engine: "rule",
-          match: result.match,
-          summary: result.summary,
-          rewrites: result.rewrites,
-          appeals: result.appeals,
-          questions: buildLocalAnswerSet(result.questions, resume, job),
-          jobKeywords: result.jobKeywords,
-          resumeSnapshot: resume,
-          jobSnapshot: job,
-          intro: buildLocalIntro(resume, job, result.match, 0, prefs.priority ?? undefined),
-          reverse: buildLocalReverse(resume, job, result.match, prefs.priority ?? undefined),
-          feedback: [],
+        const base = buildLocalPackage({
+          resume,
+          job,
           source: hubJob.source,
           priority: prefs.priority ?? undefined,
-          targetSalary: prefs.targetSalary,
-          onePoint: buildLocalOnePoint(resume, job, result.match, prefs.priority ?? undefined),
-          negotiation: buildLocalNegotiation({ job, match: result.match, priority: prefs.priority ?? undefined, targetSalary: prefs.targetSalary }),
-        };
+          targetSalary,
+          hubJobId: hubJob.id,
+        });
 
         let next = base;
-        if (aiStatus.kind === "live") {
+        if (aiStatus.kind === "live" && features.aiRefine) {
           try {
-            const enriched = await enrichWithAi(base, aiConfig);
+            const enriched = await enrichWithAi(base, aiConfig, profileBrief);
             next = enriched.pkg;
             next.questions = buildLocalAnswerSet(next.questions, resume, job);
             notify(
@@ -605,7 +795,7 @@ export default function App() {
         setDeepBusyId(null);
       }
     },
-    [aiConfig, aiStatus.kind, notify, prefs.priority, prefs.targetSalary, resume],
+    [aiConfig, aiStatus.kind, features.aiRefine, features.deepPrep, notify, prefs.priority, profileBrief, resume, targetSalary],
   );
 
   const regenerate = useCallback(async () => {
@@ -618,7 +808,7 @@ export default function App() {
         setAiOpen(true);
         return;
       }
-      const enriched = await enrichWithAi(pkg, aiConfig);
+      const enriched = await enrichWithAi(pkg, aiConfig, profileBrief);
       const next = { ...enriched.pkg, questions: buildLocalAnswerSet(enriched.pkg.questions, pkg.resumeSnapshot, pkg.jobSnapshot) };
       setPkg(next);
       setSaved((prev) => updatePackage(prev, next));
@@ -628,7 +818,7 @@ export default function App() {
     } finally {
       setRegenerating(false);
     }
-  }, [aiConfig, notify, pkg, refreshAi]);
+  }, [aiConfig, notify, pkg, profileBrief, refreshAi]);
 
   const addFeedback = useCallback((feedback: InterviewFeedback) => {
     setPkg((prev) => (prev ? { ...prev, feedback: [feedback, ...(prev.feedback ?? [])].slice(0, 8) } : prev));
@@ -682,7 +872,9 @@ export default function App() {
       if (event.key === "Escape") {
         setAiOpen(false);
         setHelpOpen(false);
+        setProfileOpen(false);
         setResumeOpen(false);
+        setPricingOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -710,7 +902,18 @@ export default function App() {
     onKeyword: (value: string) => setCollection((prev) => ({ ...prev, keyword: value })),
     onCollect: collectKeyword,
     onRegion: (value: string) => setCollection((prev) => ({ ...prev, region: value })),
-    onSort: (value: "latest" | "deadline") => setCollection((prev) => ({ ...prev, sort: value })),
+    onYears: (value: string) => setCollection((prev) => ({ ...prev, years: value })),
+    onMinFit: (value: number) => setCollection((prev) => ({ ...prev, minFit: value })),
+    onHideExcluded: (value: boolean) => setCollection((prev) => ({ ...prev, hideExcluded: value })),
+    onToggleSource: (sourceId: string) =>
+      setCollection((prev) => {
+        if (sourceId === "__reset") return { ...prev, activeSources: [] };
+        const active = prev.activeSources.includes(sourceId)
+          ? prev.activeSources.filter((id) => id !== sourceId)
+          : [...prev.activeSources, sourceId];
+        return { ...prev, activeSources: active };
+      }),
+    onSort: (value: "latest" | "deadline" | "fit") => setCollection((prev) => ({ ...prev, sort: value })),
     onToggleSave: toggleSaveJob,
     onEnrich: (id: string) => void enrichJob(id),
     enrichBusyId,
@@ -738,10 +941,22 @@ export default function App() {
     deepBusyId,
     priority: prefs.priority,
     onPriority: (id: PriorityId) => setPrefs((prev) => ({ ...prev, priority: id })),
-    targetSalary: prefs.targetSalary,
+    targetSalary,
     onTargetSalary: (value: number | null) => setPrefs((prev) => ({ ...prev, targetSalary: value })),
     aiStatus,
     onNotify: notify,
+    profile,
+    profileSaved: Boolean(savedProfile),
+    onEditProfile: () => setProfileOpen(true),
+    fits,
+    kit,
+    kitBusy,
+    onKitAi: () => void refineKit(),
+    onKitExport: exportKit,
+    onKitPrint: printKit,
+    plan,
+    features,
+    onOpenPricing: openPricing,
   };
 
   return (
@@ -751,10 +966,12 @@ export default function App() {
           view={view}
           onChangeView={changeView}
           aiStatus={aiStatus}
+          plan={plan}
+          onOpenPricing={openPricing}
           onOpenAi={() => setAiOpen(true)}
           onOpenHelp={() => setHelpOpen(true)}
           hubCount={hubJobs.filter((job) => job.source.kind !== "auto" || isTrackedJob(job)).length}
-          appliedCount={hubJobs.filter((job) => job.status === "지원완료" || job.status === "서류합격" || job.status === "면접").length}
+          appliedCount={hubJobs.filter((job) => job.status === "지원완료" || job.status === "서류합격" || job.status === "면접" || job.status === "오퍼").length}
         />
 
         <main>
@@ -764,6 +981,7 @@ export default function App() {
             ) : view === "tracker" ? (
               <TrackerView
                 jobs={hubJobs.filter((job) => job.source.kind !== "auto" || isTrackedJob(job))}
+                fits={fits}
                 onUpdate={updateJob}
                 onOpenJob={(id) => {
                   setSelectedId(id);
@@ -771,6 +989,8 @@ export default function App() {
                   setView("studio");
                 }}
                 onOpenStudio={() => changeView("studio")}
+                pipelineLimit={features.pipelineLimit}
+                onOpenPricing={openPricing}
               />
             ) : deepOpen && pkg ? (
               <ResultFlow
@@ -808,6 +1028,15 @@ export default function App() {
           onNotify={notify}
         />
 
+        <CareerProfileModal
+          open={profileOpen}
+          profile={profile}
+          saved={Boolean(savedProfile)}
+          resume={resume}
+          onClose={() => setProfileOpen(false)}
+          onSave={saveProfile}
+        />
+
         <AiSettingsModal
           open={aiOpen}
           status={aiStatus}
@@ -816,6 +1045,14 @@ export default function App() {
           onClose={() => setAiOpen(false)}
           onSave={saveAi}
           onReprobe={() => void refreshAi()}
+        />
+
+        <PricingModal
+          open={pricingOpen}
+          state={plan}
+          onClose={() => setPricingOpen(false)}
+          onSelect={choosePlan}
+          onToggleTrial={toggleTrial}
         />
 
         {helpOpen && (
@@ -834,11 +1071,14 @@ export default function App() {
               <ol className="mt-4 max-h-[54vh] space-y-2.5 overflow-y-auto px-5">
                 {[
                   "첫 화면에서는 리멤버·원티드·사람인·잡코리아에서 서울 인하우스 홍보·PR 과차장급 공고를 자동으로 모아 옵니다. 다른 직무 프리셋을 고르거나 키워드를 직접 넣어도 됩니다.",
+                  "‘내 커리어 프로필’에 직무·경력 연차·핵심 키워드·희망 연봉·제외 키워드를 저장하면 공고마다 같은 기준으로 적합도(0~100%)를 계산합니다. 점수에 쓴 비중과 근거, 맞는 키워드와 빠진 키워드를 카드와 상세 화면에 그대로 보여 줍니다.",
                   "카드를 고르면 주요 업무·자격 요건·우대 사항·마감일과 원문 지원 링크가 열립니다. 목록 정보만 있는 공고는 ‘원문에서 요건 읽어오기’로 채웁니다.",
-                  "이력서를 한 번 등록해 두면 공고마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 복사해서 지원서에 붙여넣으세요.",
-                  "‘원문에서 지원하기’를 누르면 실제 공고가 새 탭으로 열립니다. 지원 후 상태를 지원 전 → 준비중 → 지원완료 → 서류합격 → 면접으로 바꾸고 메모를 남기세요.",
+                  "이력서를 한 번 등록해 두면 공고마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 이어서 ‘지원 패키지’에서 경력기술서 어필 3선·1분 자기소개·예상 면접 질문 5개와 답변 전략·연봉 협상 스크립트를 복사하거나 MD·인쇄로 내보냅니다.",
+                  "사이트가 막히거나 로그인해야 열리는 공고는 ‘공고 URL·JD 직접 분석’ 탭에 주소나 본문을 붙여넣으면 같은 적합도·지원 패키지를 만듭니다.",
+                  "‘원문에서 지원하기’를 누르면 실제 공고가 새 탭으로 열립니다. 지원 후 상태를 관심 공고 → 지원 완료 → 서류 합격 → 면접 진행 → 최종 오퍼로 옮기고 메모·마감 D-day를 관리하세요.",
                   "카드의 북마크를 누르면 ‘내 지원’에 남아 다음 방문에도 유지됩니다. 제출서류 체크도 함께 저장됩니다.",
-                  "공고·상태·메모·지원 문구는 이 브라우저에 저장됩니다. 원문에 없는 경험·수치는 AI도 만들지 않습니다.",
+                  "공고·상태·메모·지원 문구·프로필은 이 브라우저에만 저장됩니다. 원문에 없는 경험·수치는 AI도 만들지 않습니다.",
+                  "오른쪽 위 플랜 배지를 누르면 요금제가 열립니다. 수집·적합도·이력서 파싱은 계속 무료이고, 지원 패키지 4종 전체·AI 다듬기·연봉 협상·무제한 파이프라인은 Pro입니다. 결제 연동 전이라 ‘Pro 무료 체험’을 켜서 확인합니다.",
                 ].map((text, index) => (
                   <li key={index} className="flex gap-2.5">
                     <span className="num mt-[1px] grid h-5 w-5 shrink-0 place-items-center rounded-md bg-paper-deep text-[9.5px] font-semibold text-muted">
@@ -879,7 +1119,7 @@ export default function App() {
         )}
       </div>
 
-      {pkg && <PrintSheet pkg={pkg} />}
+      {(printPkg ?? pkg) && <PrintSheet pkg={(printPkg ?? pkg) as JobPackage} />}
     </>
   );
 }
