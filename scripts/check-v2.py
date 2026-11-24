@@ -119,8 +119,15 @@ def start_server():
     raise RuntimeError("server did not start")
 
 
+SEEN = {"jobs": []}
+
+
 def route_api(page):
     def handle_jobs(route):
+        try:
+            SEEN["jobs"].append(json.loads(route.request.post_data or "{}"))
+        except Exception:  # noqa: BLE001
+            pass
         payload = {
             "ok": True,
             "query": "홍보",
@@ -242,6 +249,96 @@ def main():
         page.wait_for_timeout(600)
         check("deep returns to hub", page.locator("[data-testid=collect-bar]").count() == 1)
 
+        # 3-b. 커리어 서류 3종 → 내 서류로 공고 수집 → 바로 지원하기
+        page.set_input_files("[data-testid=kit-file-cover]", os.path.join(FIXTURES, "my-cover.txt"))
+        page.wait_for_timeout(900)
+        page.set_input_files("[data-testid=kit-file-portfolio]", os.path.join(FIXTURES, "my-portfolio.txt"))
+        page.wait_for_timeout(900)
+        page.fill("[data-testid=kit-portfolio-url]", "https://portfolio.example/haram")
+        page.wait_for_timeout(600)
+        kit = json.loads(page.evaluate("localStorage.getItem('jobfit.careerkit.v1')"))
+        docs = kit.get("docs") or {}
+        check("kit stores resume doc", bool((docs.get("resume") or {}).get("fileName")), str(docs.get("resume"))[:80])
+        check("kit stores cover doc", bool((docs.get("cover") or {}).get("fileName")), str(docs.get("cover"))[:80])
+        check("kit stores portfolio doc", bool((docs.get("portfolio") or {}).get("fileName")), str(docs.get("portfolio"))[:80])
+        check("kit doc summary", len((docs.get("cover") or {}).get("summary") or "") > 20, str((docs.get("cover") or {}).get("summary"))[:60])
+        check("kit keywords merged", len(kit.get("keywords") or []) >= 6, str(kit.get("keywords"))[:120])
+        check(
+            "kit portfolio projects",
+            any("런칭" in name for name in ((docs.get("portfolio") or {}).get("projects") or [])),
+            str((docs.get("portfolio") or {}).get("projects")),
+        )
+        check("kit portfolio url saved", kit.get("portfolioUrl") == "https://portfolio.example/haram", str(kit.get("portfolioUrl")))
+        check("kit ready count", page.get_attribute("[data-testid=kit-ready]", "data-docs") == "3", page.get_attribute("[data-testid=kit-ready]", "data-docs") or "")
+        check("kit slots ready", page.locator("[data-testid^=kit-slot-][data-ready=true]").count() == 3, str(page.locator("[data-testid^=kit-slot-][data-ready=true]").count()))
+        check("kit keyword chips", page.locator("[data-testid=kit-keyword]").count() >= 4, str(page.locator("[data-testid=kit-keyword]").count()))
+        check("doc fit badges", page.locator("[data-testid=doc-fit-badge]").count() >= 4, str(page.locator("[data-testid=doc-fit-badge]").count()))
+        check("doc match lines", page.locator("[data-testid=doc-match]").count() >= 3, str(page.locator("[data-testid=doc-match]").count()))
+
+        SEEN["jobs"].clear()
+        page.click("[data-testid=kit-collect]")
+        page.wait_for_timeout(1200)
+        body = SEEN["jobs"][-1] if SEEN["jobs"] else {}
+        keywords = body.get("keywords") or []
+        check("doc collect sends keywords", len(keywords) >= 2, json.dumps(body, ensure_ascii=False)[:160])
+        check("doc collect keywords no titles", all(k not in ("매니저", "과장", "차장", "대리") for k in keywords), str(keywords))
+        check("doc query note", page.locator("[data-testid=doc-query-note]").count() == 1, page.inner_text("[data-testid=collect-bar]")[:120])
+        check("doc sort selected", page.get_attribute("[data-testid=sort-doc]", "data-active") == "true", str(page.get_attribute("[data-testid=sort-doc]", "data-active")))
+        ordered_scores = page.evaluate("Array.from(document.querySelectorAll('[data-testid=doc-fit-badge]')).map(el => Number(el.dataset.score))")
+        check("doc sort desc", ordered_scores == sorted(ordered_scores, reverse=True), str(ordered_scores))
+        page.screenshot(path=f"{OUT}/09-desktop-kit-docs.png")
+
+        page.locator("[data-testid=hub-job]").first.click()
+        page.wait_for_timeout(800)
+        check("doc match panel", page.locator("[data-testid=doc-match-panel]").count() == 1)
+        check("doc match score", page.locator("[data-testid=doc-match-score]").count() == 1, page.inner_text("[data-testid=doc-match-panel]")[:100])
+        check("doc match reasons", page.locator("[data-testid=doc-match-list] li").count() >= 2, str(page.locator("[data-testid=doc-match-list] li").count()))
+
+        page.click("[data-testid=apply-open]")
+        page.wait_for_selector("[data-testid=apply-drawer]", timeout=10000)
+        page.wait_for_timeout(500)
+        check("apply drawer opens", page.locator("[data-testid=apply-drawer]").count() == 1)
+        check("apply drawer documents", page.evaluate("Array.from(document.querySelectorAll('[data-testid=apply-doc-row]')).filter(el => el.dataset.ready === 'true').length") == 3)
+        one = page.evaluate("document.querySelector('[data-testid=apply-drawer] [data-testid=apply-one-liner]').innerText")
+        para = page.evaluate("document.querySelector('[data-testid=apply-drawer] [data-testid=apply-paragraph]').innerText")
+        check("apply drawer one liner", len(one) >= 10, one[:60])
+        check("apply drawer paragraph", len(para) >= 80 and "포트폴리오" in para, para[:100])
+        check("apply drawer email subject", "[지원]" in page.inner_text("[data-testid=apply-email-subject]"), page.inner_text("[data-testid=apply-email-subject]"))
+        check("apply drawer email body", len(page.inner_text("[data-testid=apply-email-body]")) > 120, str(len(page.inner_text("[data-testid=apply-email-body]"))))
+        check("apply drawer site link", (page.get_attribute("[data-testid=apply-site]", "href") or "").startswith("https://"), page.get_attribute("[data-testid=apply-site]", "href") or "")
+        check("apply drawer honest note", "직접 진행" in page.inner_text("[data-testid=apply-notes]"), page.inner_text("[data-testid=apply-notes]")[:100])
+        page.screenshot(path=f"{OUT}/10-desktop-apply-drawer.png")
+
+        page.click("[data-testid=apply-via-email]")
+        page.click("[data-testid=apply-record]")
+        page.wait_for_timeout(800)
+        check("apply recorded panel", page.locator("[data-testid=apply-recorded]").count() == 1, page.inner_text("[data-testid=apply-drawer]")[:120])
+        stored = json.loads(page.evaluate("localStorage.getItem('jobfit.hub.jobs.v1')||'[]'"))
+        recorded = [job for job in stored if job.get("applied")]
+        check("apply record stored", len(recorded) == 1, str(len(recorded)))
+        if recorded:
+            record = recorded[0]
+            check("apply record status", record.get("status") == "지원완료", str(record.get("status")))
+            check("apply record via", (record.get("applied") or {}).get("via") == "email", str((record.get("applied") or {}).get("via")))
+            check("apply record documents", len((record.get("applied") or {}).get("documents") or []) >= 3, str((record.get("applied") or {}).get("documents")))
+            check("apply record time", bool((record.get("applied") or {}).get("at")), str((record.get("applied") or {}).get("at")))
+        page.click("[data-testid=apply-close]")
+        page.wait_for_timeout(400)
+        check("detail record chip", page.locator("[data-testid=apply-recorded-detail]").count() == 1)
+
+        page.click("[data-testid=nav-tracker]")
+        page.wait_for_timeout(800)
+        check("tracker applied column has record", "지원완료" in page.inner_text("[data-testid=tracker-column-applied]"), page.inner_text("[data-testid=tracker-column-applied]")[:100])
+        page.click("[data-testid=nav-studio]")
+        page.wait_for_timeout(700)
+
+        page.reload(wait_until="domcontentloaded")
+        page.wait_for_selector("[data-testid=hub-job]", timeout=45000)
+        page.wait_for_timeout(1000)
+        kit_after = json.loads(page.evaluate("localStorage.getItem('jobfit.careerkit.v1')") or "{}")
+        check("kit survives reload", all((kit_after.get("docs") or {}).get(k) for k in ("resume", "cover", "portfolio")), str(list((kit_after.get("docs") or {}).keys())))
+        check("kit slots after reload", page.locator("[data-testid^=kit-slot-][data-ready=true]").count() == 3, str(page.locator("[data-testid^=kit-slot-][data-ready=true]").count()))
+
         # 4. URL·JD 탭
         page.click("[data-testid=collect-tab-manual]")
         page.wait_for_timeout(400)
@@ -324,6 +421,16 @@ def main():
         mp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
         mp.wait_for_timeout(800)
         check("mobile no overflow", no_overflow(mp))
+        mp.set_input_files("[data-testid=kit-file-cover]", os.path.join(FIXTURES, "my-cover.txt"))
+        mp.wait_for_timeout(900)
+        check("mobile kit cover ready", mp.get_attribute("[data-testid=kit-slot-cover]", "data-ready") == "true", str(mp.get_attribute("[data-testid=kit-slot-cover]", "data-ready")))
+        mp.click("[data-testid=apply-open]")
+        mp.wait_for_selector("[data-testid=apply-drawer]", timeout=10000)
+        mp.wait_for_timeout(400)
+        check("mobile drawer no overflow", no_overflow(mp), str(mp.evaluate("document.documentElement.scrollWidth")))
+        check("mobile drawer one liner", mp.evaluate("document.querySelector('[data-testid=apply-drawer] [data-testid=apply-one-liner]').innerText").strip() != "")
+        mp.click("[data-testid=apply-close]")
+        mp.wait_for_timeout(300)
         mp.locator("[data-testid=hub-kit]").scroll_into_view_if_needed()
         mp.wait_for_timeout(600)
         mp.screenshot(path=f"{OUT}/06-mobile-kit.png")

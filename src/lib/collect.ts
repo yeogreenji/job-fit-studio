@@ -33,6 +33,8 @@ export interface CollectedJob {
   detailLevel: "full" | "list";
   conditions: string;
   companyType?: "inhouse" | "agency" | "searchfirm" | "unknown";
+  /** 서류 키워드 수집에서 이 공고에 실제로 걸린 키워드 */
+  hitKeywords?: string[];
 }
 
 /** 프로필 수집에서 남긴 건수·걸린 건수 */
@@ -88,12 +90,16 @@ export interface CollectionState {
   hideExcluded: boolean;
   /** 켜 둔 수집처 (비어 있으면 전체) */
   activeSources: string[];
-  sort: "latest" | "deadline" | "fit";
+  sort: "latest" | "deadline" | "fit" | "doc";
   status: "idle" | "loading" | "ready" | "empty" | "error";
   sources: CollectSource[];
   at: string | null;
   error: string;
   cached: boolean;
+  /** 이 결과를 만든 방식 — 프리셋·키워드(auto) / 내 서류(docs) */
+  mode: "auto" | "docs";
+  /** 내 서류로 모을 때 서버에 보낸 키워드 */
+  docKeywords: string[];
 }
 
 export class CollectError extends Error {
@@ -144,12 +150,13 @@ function normalizeJob(raw: unknown): CollectedJob | null {
       item.companyType === "inhouse" || item.companyType === "agency" || item.companyType === "searchfirm"
         ? item.companyType
         : "unknown",
+    hitKeywords: asTags(item.hitKeywords),
   };
 }
 
 /** 서버에서 실제 공고를 받아 옵니다. */
 export async function requestJobs(
-  input: { query: string; limit?: number; detail?: number; profile?: string },
+  input: { query: string; limit?: number; detail?: number; profile?: string; keywords?: string[] },
   timeoutMs = 40_000,
 ): Promise<CollectResponse> {
   const controller = new AbortController();
@@ -164,6 +171,7 @@ export async function requestJobs(
         limit: input.limit ?? 36,
         detail: input.detail ?? 12,
         ...(input.profile ? { profile: input.profile } : {}),
+        ...(input.keywords?.length ? { keywords: input.keywords } : {}),
       }),
       signal: controller.signal,
     });
@@ -280,6 +288,7 @@ export function hubJobFromCollected(job: CollectedJob, fetchedAt: string): HubJo
       url: job.url,
       fetchedAt,
       detailLevel: job.detailLevel,
+      hitKeywords: job.hitKeywords,
     },
     applyUrl: job.applyUrl || job.url,
     status: "지원 전",

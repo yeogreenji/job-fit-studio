@@ -369,6 +369,25 @@ check("jobs profile cache hit", status == 200 and body.get("cached") is True, st
 status, body, _ = jobs_api(4383, {"profile": "no-such-profile", "q": "홍보", "limit": 24})
 check("jobs unknown profile falls back", status == 200 and body.get("filter") is None, str(body.get("filter")))
 
+# ── 내 서류 키워드 수집: 여러 키워드를 한 번에, 공고별로 걸린 키워드를 돌려줍니다 ──
+status, body, _ = jobs_api(4383, {"keywords": ["보도자료", "위기관리"], "limit": 24, "detail": 4})
+doc_jobs = body.get("jobs") or []
+check("jobs keywords 200", status == 200 and body.get("ok") is True, f"{status} {str(body)[:160]}")
+check("jobs keywords count", len(doc_jobs) >= 5, str(len(doc_jobs)))
+check("jobs keywords query label", "보도자료" in (body.get("query") or "") and "·" in (body.get("query") or ""), str(body.get("query")))
+check("jobs keywords hits", any(job.get("hitKeywords") for job in doc_jobs), str([job.get("hitKeywords") for job in doc_jobs][:4]))
+check(
+    "jobs keywords hit values",
+    all(set(job.get("hitKeywords") or []) <= {"보도자료", "위기관리"} for job in doc_jobs),
+    str([job.get("hitKeywords") for job in doc_jobs][:4]),
+)
+check(
+    "jobs keywords no duplicates",
+    len({(job.get("company"), job.get("role")) for job in doc_jobs}) == len(doc_jobs),
+    str(len(doc_jobs)),
+)
+status, body, _ = jobs_api(4383, {"keywords": ["보도자료", "위기관리"], "limit": 24, "detail": 4})
+check("jobs keywords cache hit", status == 200 and body.get("cached") is True, str(body.get("cached")))
 status, body, _ = jobs_api(4383, raw=b"{not json")
 check("jobs bad body 400", status == 400 and (body.get("error") or {}).get("code") == "bad_body", f"{status} {str(body)[:120]}")
 status, body, _ = jobs_api(4383, payload=None, query="")
@@ -723,6 +742,95 @@ with sync_playwright() as p:
         page.wait_for_timeout(500)
 
     step("history view", history_view)
+
+    # ────────────────────── 커리어 서류 3종 → 서류 기반 수집 → 지원 접수 ──────────────────────
+    def career_kit_apply():
+        kctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR")
+        kctx.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(PLAN_PRO)))
+        kp = kctx.new_page()
+        kp.set_default_timeout(20000)
+        attach(kp, "kit")
+        kp.goto(AI, wait_until="domcontentloaded")
+        check("kit first screen collects", wait_count(kp, "[data-testid=hub-job]", 8, 90000), str(kp.locator("[data-testid=hub-job]").count()))
+        kp.wait_for_timeout(800)
+
+        kp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.txt"))
+        kp.wait_for_selector("[data-testid=resume-status]", timeout=20000)
+        kp.wait_for_timeout(700)
+        kp.set_input_files("[data-testid=kit-file-cover]", os.path.join(FIXTURES, "my-cover.txt"))
+        kp.wait_for_timeout(900)
+        kp.set_input_files("[data-testid=kit-file-portfolio]", os.path.join(FIXTURES, "my-portfolio.txt"))
+        kp.wait_for_timeout(900)
+        check("kit three docs ready", kp.get_attribute("[data-testid=kit-ready]", "data-docs") == "3", str(kp.get_attribute("[data-testid=kit-ready]", "data-docs")))
+        check("kit slots ready", kp.locator("[data-testid^=kit-slot-][data-ready=true]").count() == 3, str(kp.locator("[data-testid^=kit-slot-][data-ready=true]").count()))
+        check("kit keywords shown", kp.locator("[data-testid=kit-keyword]").count() >= 4, str(kp.locator("[data-testid=kit-keyword]").count()))
+
+        kit_state = json.loads(kp.evaluate("localStorage.getItem('jobfit.careerkit.v1')") or "{}")
+        docs = kit_state.get("docs") or {}
+        check("kit persisted metadata", all((docs.get(key) or {}).get("fileName") for key in ("resume", "cover", "portfolio")), str(docs)[:160])
+        check("kit persisted keywords", len(kit_state.get("keywords") or []) >= 6, str(kit_state.get("keywords"))[:120])
+        check(
+            "kit portfolio projects",
+            any("런칭" in name for name in ((docs.get("portfolio") or {}).get("projects") or [])),
+            str((docs.get("portfolio") or {}).get("projects")),
+        )
+
+        kp.click("[data-testid=kit-collect]")
+        check("doc query note", wait_text(kp, "[data-testid=doc-query-note]", "내 서류 키워드", 15000), kp.inner_text("[data-testid=collect-bar]")[:140])
+        check("doc sort active", wait_attr(kp, "[data-testid=sort-doc]", "data-active", "true", 90000), str(kp.get_attribute("[data-testid=sort-doc]", "data-active")))
+        check("doc collect returns jobs", wait_count(kp, "[data-testid=hub-job]", 6, 90000), str(kp.locator("[data-testid=hub-job]").count()))
+        kp.wait_for_timeout(700)
+        check("doc badges on cards", wait_count(kp, "[data-testid=doc-fit-badge]", 3, 20000), str(kp.locator("[data-testid=doc-fit-badge]").count()))
+        scores = kp.evaluate("Array.from(document.querySelectorAll('[data-testid=doc-fit-badge]')).map(el => Number(el.dataset.score))")
+        check("doc sort descending", scores == sorted(scores, reverse=True), str(scores))
+
+        kp.locator("[data-testid=hub-job]").first.click()
+        kp.wait_for_timeout(900)
+        check("doc match panel", kp.locator("[data-testid=doc-match-panel]").count() == 1)
+        check("doc match reasons", kp.locator("[data-testid=doc-match-list] li").count() >= 1, str(kp.locator("[data-testid=doc-match-list] li").count()))
+
+        kp.click("[data-testid=apply-open]")
+        kp.wait_for_selector("[data-testid=apply-drawer]", timeout=12000)
+        kp.wait_for_timeout(600)
+        ready_docs = kp.evaluate("Array.from(document.querySelectorAll('[data-testid=apply-doc-row]')).filter(el => el.dataset.ready === 'true').length")
+        check("apply drawer documents ready", ready_docs == 3, str(ready_docs))
+        one = kp.evaluate("document.querySelector('[data-testid=apply-drawer] [data-testid=apply-one-liner]').innerText")
+        para = kp.evaluate("document.querySelector('[data-testid=apply-drawer] [data-testid=apply-paragraph]').innerText")
+        check("apply drawer one liner", len(one) >= 10, one[:80])
+        check("apply drawer cover paragraph", len(para) >= 80, para[:100])
+        check("apply drawer email package", "[지원]" in kp.inner_text("[data-testid=apply-email-subject]"), kp.inner_text("[data-testid=apply-email-subject]"))
+        check("apply drawer site link", (kp.get_attribute("[data-testid=apply-site]", "href") or "").startswith("https://"), kp.get_attribute("[data-testid=apply-site]", "href") or "")
+        check("apply drawer honest note", "직접 진행" in kp.inner_text("[data-testid=apply-notes]"), kp.inner_text("[data-testid=apply-notes]")[:100])
+
+        kp.click("[data-testid=apply-record]")
+        kp.wait_for_timeout(900)
+        check("apply recorded panel", kp.locator("[data-testid=apply-recorded]").count() == 1)
+        saved = hub_jobs(kp)
+        recorded = [job for job in saved if job.get("applied")]
+        check("apply record persisted", len(recorded) == 1, str(len(recorded)))
+        if recorded:
+            record = recorded[0]
+            check("apply record status", record.get("status") == "지원완료", str(record.get("status")))
+            check("apply record documents", len((record.get("applied") or {}).get("documents") or []) >= 3, str((record.get("applied") or {}).get("documents")))
+            check("apply record timestamp", bool((record.get("applied") or {}).get("at")), str((record.get("applied") or {}).get("at")))
+        kp.click("[data-testid=apply-close]")
+        kp.wait_for_timeout(500)
+        check("detail record chip", kp.locator("[data-testid=apply-recorded-detail]").count() == 1)
+        check("kit context no overflow", no_overflow(kp), str(kp.evaluate("document.documentElement.scrollWidth")))
+
+        kp.click("[data-testid=nav-tracker]")
+        kp.wait_for_timeout(900)
+        check("tracker applied column", "지원완료" in kp.inner_text("[data-testid=tracker-column-applied]"), kp.inner_text("[data-testid=tracker-column-applied]")[:100])
+        kp.reload(wait_until="domcontentloaded")
+        check("hub after reload", wait_count(kp, "[data-testid=hub-job]", 6, 90000), str(kp.locator("[data-testid=hub-job]").count()))
+        kp.wait_for_timeout(900)
+        check("kit docs survive reload", kp.get_attribute("[data-testid=kit-ready]", "data-docs") == "3", str(kp.get_attribute("[data-testid=kit-ready]", "data-docs")))
+        kp.click("[data-testid=nav-tracker]")
+        kp.wait_for_timeout(900)
+        check("record survives reload", "지원완료" in kp.inner_text("[data-testid=tracker-column-applied]"), kp.inner_text("[data-testid=tracker-column-applied]")[:100])
+        kctx.close()
+
+    step("career kit apply", career_kit_apply)
     ctx.close()
     browser.close()
 

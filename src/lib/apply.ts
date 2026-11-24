@@ -37,8 +37,22 @@ export const linesOf = (text: string | undefined, max = 14): string[] =>
     .filter((line) => line.length > 1)
     .slice(0, max);
 
-/** 공고의 제출서류 항목. 원문에 없으면 빈 배열입니다(임의로 만들지 않습니다). */
-export const docItems = (job: JobPosting): string[] => linesOf(job.documents, 10);
+/**
+ * 공고의 제출서류 항목. 원문에 없으면 빈 배열입니다(임의로 만들지 않습니다).
+ * 한 줄에 쉼표로 여러 서류를 적은 공고는 항목별로 나눠 체크할 수 있게 합니다.
+ */
+export const docItems = (job: JobPosting): string[] => {
+  const rows: string[] = [];
+  for (const line of linesOf(job.documents, 10)) {
+    const parts = line.split(/\s*[,、]\s*/).map((part) => part.trim()).filter((part) => part.length > 1);
+    if (parts.length > 1 && line.length <= 60 && parts.every((part) => part.length <= 24)) {
+      rows.push(...parts);
+    } else {
+      rows.push(line);
+    }
+  }
+  return rows.slice(0, 10);
+};
 
 const clean = (text: string) => text.replace(/\s+/g, " ").trim();
 

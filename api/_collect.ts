@@ -56,6 +56,8 @@ export interface CollectedJob {
   maxYears?: number | null;
   leaderPosition?: boolean;
   headhunter?: boolean;
+  /** 서류 키워드 수집 — 이 공고에 실제로 걸린 검색 키워드 */
+  hitKeywords?: string[];
 }
 
 /** 프로필 수집에서 몇 건이 어떤 이유로 빠졌는지 */
@@ -782,6 +784,8 @@ export interface CollectOptions {
   budgetMs?: number;
   /** 기본 수집 타깃 프로필 id (예: seoul-inhouse-pr) */
   profile?: string;
+  /** 내 서류(이력서·자소서·폴리오)에서 뽑은 검색 키워드 — 여러 개를 한 번에 모읍니다 */
+  keywords?: string[];
 }
 
 interface SourceTask {
@@ -963,7 +967,115 @@ async function collectProfiled(
 
 const detailLimitSafe = (value: number): number => clamp(Math.round(value ?? 8), 0, 20);
 
+/** 키워드가 공고 글 안에 있는지 — 두 단어 이상 키워드는 모든 단어가 있어야 맞은 것으로 봅니다. */
+function keywordInJob(job: CollectedJob, keyword: string): boolean {
+  const haystack = [job.company, job.role, ...(job.tags ?? []), job.conditions, job.responsibilities, job.requirements, job.preferred]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  const term = keyword.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!term) return false;
+  if (haystack.includes(term)) return true;
+  const tokens = term.split(" ").filter((token) => token.length >= 2);
+  return tokens.length > 1 && tokens.every((token) => haystack.includes(token));
+}
+
+/**
+ * 내 서류 키워드 수집: 서류에서 뽑은 키워드 여러 개를 네 곳에 나누어 던지고,
+ * 각 공고에 어떤 키워드가 걸렸는지(hitKeywords)를 붙여 돌려줍니다.
+ * 화면은 이 값을 서류 대조 순서로 쓰기 때문에, 조건에 안 맞는 공고를 지우지 않고 근거만 남깁니다.
+ */
+async function collectByKeywords(
+  keywords: string[],
+  options: { limit: number; detailLimit: number; budgetMs: number },
+): Promise<CollectResult> {
+  const started = Date.now();
+  const budget = clamp(options.budgetMs, 8_000, 25_000);
+  const deadline = started + budget;
+  const perSource = clamp(Math.ceil(options.limit / 2) + 6, 12, 30);
+
+  const tasks: SourceTask[] = [
+    { id: "remember", name: "리멤버", run: () => collectRemember(keywords, 30, deadline, 1) },
+    {
+      id: "wanted",
+      name: "원티드",
+      run: async () => {
+        const groups = await Promise.all(keywords.map((keyword) => collectWanted(keyword, 18, 0, deadline).catch(() => [] as CollectedJob[])));
+        return groups.flat();
+      },
+    },
+    {
+      id: "saramin",
+      name: "사람인",
+      run: async () => {
+        const groups = await Promise.all(keywords.map((keyword) => collectSaramin(keyword, perSource, deadline).catch(() => [] as CollectedJob[])));
+        return groups.flat();
+      },
+    },
+    {
+      id: "jobkorea",
+      name: "잡코리아",
+      run: async () => {
+        const groups = await Promise.all(keywords.map((keyword) => collectJobkorea(keyword, perSource, deadline).catch(() => [] as CollectedJob[])));
+        return groups.flat();
+      },
+    },
+  ];
+
+  const settled = await runTasks(tasks);
+  const all = settled.flatMap((entry) => entry.jobs);
+
+  for (const job of all) job.hitKeywords = keywords.filter((keyword) => keywordInJob(job, keyword));
+
+  const ordered = dedupeFlat(
+    [...all].sort((a, b) => (b.hitKeywords?.length ?? 0) - (a.hitKeywords?.length ?? 0)),
+    options.limit,
+  );
+
+  const wantedTargets = ordered.filter((job) => job.source === "wanted");
+  if (wantedTargets.length && detailLimitSafe(options.detailLimit) > 0) {
+    const wantIds = new Set(wantedTargets.slice(0, clamp(options.detailLimit, 0, 12)).map((job) => job.id));
+    await enrichWantedDetail(
+      ordered.filter((job) => wantIds.has(job.id)),
+      wantIds.size,
+      deadline + 2_000,
+    );
+  }
+
+  const reports: SourceReport[] = settled.map((entry) => {
+    const own = ordered.filter((job) => job.source === entry.task.id);
+    const raw = entry.jobs.length;
+    return {
+      id: entry.task.id,
+      name: entry.task.name,
+      ok: !entry.error,
+      count: own.length,
+      full: own.filter((job) => job.detailLevel === "full").length,
+      ms: entry.ms,
+      note: entry.error || (own.length ? `원본 ${raw}건 → 키워드 ${own.length}건` : `원본 ${raw}건 · 키워드에 맞는 공고 없음`),
+    };
+  });
+
+  return {
+    ok: ordered.length > 0,
+    query: keywords.join(" · "),
+    jobs: ordered,
+    sources: reports,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 export async function collectJobs(options: CollectOptions): Promise<CollectResult> {
+  const docKeywords = [...new Set((options.keywords ?? []).map((keyword) => cleanQuery(keyword)).filter(Boolean))].slice(0, 6);
+  if (docKeywords.length) {
+    return collectByKeywords(docKeywords, {
+      limit: clamp(Math.round(options.limit ?? 60), 6, 60),
+      detailLimit: clamp(Math.round(options.detailLimit ?? 8), 0, 12),
+      budgetMs: options.budgetMs ?? 20_000,
+    });
+  }
+
   const profile = profileById(options.profile ? cleanQuery(options.profile) : "");
   if (profile) {
     return collectProfiled(profile, {

@@ -127,6 +127,14 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   const rawProfile =
     (typeof body.profile === "string" ? body.profile : "") || url.searchParams.get("profile") || "";
   const profile = rawProfile.trim() in TARGET_PROFILES ? rawProfile.trim() : "";
+  // 내 서류 키워드 수집 — 문자열 배열(최대 6개)만 받습니다.
+  const keywordList = Array.isArray(body.keywords)
+    ? body.keywords.filter((value): value is string => typeof value === "string").map((value) => value.trim()).filter(Boolean).slice(0, 6)
+    : [];
+  const keywordsParam = url.searchParams.get("keywords");
+  if (!keywordList.length && keywordsParam) {
+    keywordList.push(...keywordsParam.split(",").map((value) => value.trim()).filter(Boolean).slice(0, 6));
+  }
 
   if (url.searchParams.get("ping") === "1") {
     send(res, 200, {
@@ -139,7 +147,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
     return;
   }
 
-  const key = `${profile}|${rawQuery.trim().toLowerCase()}|${limit}|${detail}`;
+  const key = `${profile}|${keywordList.join(",")}|${rawQuery.trim().toLowerCase()}|${limit}|${detail}`;
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
     send(res, 200, { ...hit.result, cached: true, service: SERVICE, version: VERSION });
@@ -147,7 +155,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
   }
 
   try {
-    const result = await collectJobs({ query: rawQuery, limit, detailLimit: detail, profile: profile || undefined });
+    const result = await collectJobs({ query: rawQuery, limit, detailLimit: detail, profile: profile || undefined, keywords: keywordList });
     cache.set(key, { at: Date.now(), result });
     trimCache();
     if (!result.jobs.length) {

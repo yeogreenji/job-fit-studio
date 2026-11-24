@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
+  BadgeCheck,
   Bookmark,
   BookmarkCheck,
   Building2,
@@ -10,6 +11,7 @@ import {
   CircleAlert,
   ClipboardList,
   FileText,
+  FolderOpen,
   Layers,
   Link2,
   Loader2,
@@ -20,6 +22,7 @@ import {
   Radar,
   RefreshCw,
   Search,
+  Send,
   SlidersHorizontal,
   Sparkles,
   Star,
@@ -27,9 +30,10 @@ import {
   Wand2,
   X,
 } from "lucide-react";
-import type { AiStatus, CareerProfile, FitResult, HubJob, JobPackage, MasterResume, PlanState, PriorityId } from "../types";
+import type { AiStatus, CareerDocKind, CareerKit, CareerProfile, DocMatch, FitResult, HubJob, JobPackage, MasterResume, PlanState, PriorityId } from "../types";
 import type { PlanFeatures } from "../lib/plan";
 import { APPLY_STATUSES, STATUS_CHIP, STATUS_DOT, docItems, linesOf } from "../lib/apply";
+import { DOC_LABEL, DOC_TAG, docMatchLabel, kitReady, searchKeywords } from "../lib/careerKit";
 import { NO_DOCUMENTS_HINT, splitJobUrls, type AddProgress } from "../lib/hub";
 import { JOB_PRESETS, presetById } from "../lib/jobPresets";
 import {
@@ -47,13 +51,12 @@ import { resumeReady, type ResumeMeta } from "../lib/storage";
 import { Card, CopyButton, cx, scoreColor } from "./ui";
 import { FitView } from "./FitView";
 import { KitPanel } from "./KitPanel";
-import { WorkspaceHeader } from "./WorkspaceHeader";
+import { CareerKitPanel } from "./CareerKitPanel";
 
 export interface HubProps {
   resume: MasterResume;
   resumeMeta: ResumeMeta | null;
   resumeBusy: string | null;
-  onResumeFile: (file: File) => void;
   onOpenResume: () => void;
   onSampleResume: () => void;
   jobs: HubJob[];
@@ -65,7 +68,7 @@ export interface HubProps {
   onCollect: () => void;
   onRegion: (value: string) => void;
   onYears: (value: string) => void;
-  onSort: (value: "latest" | "deadline" | "fit") => void;
+  onSort: (value: "latest" | "deadline" | "fit" | "doc") => void;
   onMinFit: (value: number) => void;
   onHideExcluded: (value: boolean) => void;
   onToggleSource: (sourceId: string) => void;
@@ -104,6 +107,15 @@ export interface HubProps {
   profileSaved: boolean;
   onEditProfile: () => void;
   fits: Record<string, FitResult>;
+  /* ── 커리어 서류 3종 ── */
+  careerKit: CareerKit;
+  onDocFile: (file: File, kind?: CareerDocKind) => void;
+  onRemoveDoc: (kind: CareerDocKind) => void;
+  onPortfolioUrl: (value: string) => void;
+  onCollectDocs: () => void;
+  collectingDocs: boolean;
+  docFits: Record<string, DocMatch>;
+  onOpenApply: (job: HubJob) => void;
   /* ── 지원 패키지 ── */
   kit: JobPackage | null;
   kitBusy: boolean;
@@ -134,6 +146,20 @@ const clockOf = (iso: string | null): string => {
 const deadlineLabel = (deadline: string): string => {
   if (!deadline) return "마감 미확인";
   return /^\d{4}-\d{2}-\d{2}/.test(deadline) ? deadline.slice(0, 10) : deadline;
+};
+
+/** 접수 시각 — 11/25 09:12 */
+const stampOf = (iso: string): string => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+const VIA_TEXT: Record<"site" | "email" | "other", string> = {
+  site: "채용 사이트",
+  email: "이메일",
+  other: "기타 경로",
 };
 
 const emptyDocsHint = (job: HubJob["job"]): string =>
@@ -378,6 +404,18 @@ function CollectionBar(props: HubProps) {
           >
             적합도순
           </button>
+          {kitReady(props.careerKit) && (
+            <button
+              type="button"
+              className="seg-item text-[10.5px]"
+              data-active={collection.sort === "doc" ? "true" : "false"}
+              data-testid="sort-doc"
+              onClick={() => props.onSort("doc")}
+              title="업로드한 이력서·자소서·포폴의 키워드와 맞는 순서"
+            >
+              서류 적합
+            </button>
+          )}
         </div>
       </div>
 
@@ -422,6 +460,29 @@ function CollectionBar(props: HubProps) {
           )}
         </span>
         <FilterNote collection={collection} />
+        {collection.mode === "docs" && collection.docKeywords.length > 0 && (
+          <span className="flex min-w-0 flex-wrap items-center gap-1 text-[9.5px] text-muted" data-testid="doc-query-note">
+            <FolderOpen size={9} className="text-accent" />
+            <span className="font-semibold text-ink-2">내 서류 키워드</span>
+            {collection.docKeywords.map((term) => (
+              <span key={term} className="chip bg-accent-soft px-1 py-0 text-[9px] text-accent-deep">
+                {term}
+              </span>
+            ))}
+          </span>
+        )}
+        {kitReady(props.careerKit) && collection.mode !== "docs" && (
+          <button
+            type="button"
+            onClick={props.onCollectDocs}
+            disabled={props.collectingDocs}
+            className="btn btn-ghost h-6 px-1.5 text-[9.5px] text-accent-deep"
+            data-testid="collect-docs"
+            title="이력서·자소서·포폴에서 뽑은 키워드로 다시 모읍니다"
+          >
+            <FolderOpen size={10} /> 내 서류로 수집
+          </button>
+        )}
         <span className="ml-auto">
           <SourcePills collection={collection} onToggle={props.onToggleSource} />
         </span>
@@ -613,10 +674,25 @@ function CollectionBar(props: HubProps) {
     </Card>
   );
 }
-function JobCard({ item, active, fit, onSelect, onToggleSave }: { item: HubJob; active: boolean; fit: FitResult | undefined; onSelect: () => void; onToggleSave: () => void }) {
+function JobCard({
+  item,
+  active,
+  fit,
+  doc,
+  onSelect,
+  onToggleSave,
+}: {
+  item: HubJob;
+  active: boolean;
+  fit: FitResult | undefined;
+  doc: DocMatch | undefined;
+  onSelect: () => void;
+  onToggleSave: () => void;
+}) {
   const saved = Boolean(item.saved);
   const dday = ddayOf(item.job.deadline);
   const showFit = Boolean(fit && !fit.needsProfile);
+  const showDoc = Boolean(doc && !doc.needsKit);
   return (
     <li className="flex items-stretch" data-testid="hub-job-row" data-job-id={item.id}>
       <button
@@ -644,6 +720,16 @@ function JobCard({ item, active, fit, onSelect, onToggleSave }: { item: HubJob; 
               {fit.score}%
             </span>
           )}
+          {showDoc && doc && (
+            <span
+              className="num chip shrink-0 border border-accent/40 bg-accent-soft px-1.5 py-0 text-[9px] font-semibold text-accent-deep"
+              title={`${doc.summary} · ${docMatchLabel(doc)}`}
+              data-testid="doc-fit-badge"
+              data-score={doc.score}
+            >
+              서류 {doc.score}%
+            </span>
+          )}
           <span className="chip ml-auto shrink-0 bg-paper-deep px-1.5 py-0.5 text-[9px] text-faint">{item.source.site || "직접 추가"}</span>
         </span>
         <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-ink-2">{item.job.role || "직무 미확인"}</span>
@@ -669,6 +755,17 @@ function JobCard({ item, active, fit, onSelect, onToggleSave }: { item: HubJob; 
         )}
         {item.job.tags && item.job.tags.length > 0 && (
           <span className="mt-1 block truncate text-[9px] text-accent-deep/80">{item.job.tags.slice(0, 3).join(" · ")}</span>
+        )}
+        {showDoc && doc && doc.matched.length > 0 && (
+          <span className="mt-1 flex flex-wrap items-center gap-1 text-[8.5px] text-muted" data-testid="doc-match">
+            <FolderOpen size={8} className="shrink-0 text-accent" />
+            {doc.matched.slice(0, 2).map((match, index) => (
+              <span key={`${match.doc}-${match.label}`} className="chip border border-line bg-surface px-1 py-0 text-[8.5px] text-ink-2">
+                {DOC_TAG[match.doc]} · {match.label}
+                {index === 0 && <span className="ml-0.5 text-[8px] text-faint">{match.where}</span>}
+              </span>
+            ))}
+          </span>
         )}
       </button>
       <button
@@ -712,8 +809,11 @@ function JobList(props: HubProps) {
     if (collection.sort === "fit") {
       return [...filtered].sort((a, b) => (props.fits[b.id]?.score ?? -1) - (props.fits[a.id]?.score ?? -1));
     }
+    if (collection.sort === "doc") {
+      return [...filtered].sort((a, b) => (props.docFits[b.id]?.score ?? -1) - (props.docFits[a.id]?.score ?? -1));
+    }
     return filtered;
-  }, [props.jobs, props.collection, props.fits]);
+  }, [props.jobs, props.collection, props.fits, props.docFits]);
   const saved = useMemo(
     () =>
       props.jobs
@@ -773,7 +873,7 @@ function JobList(props: HubProps) {
             {tab === "feed"
               ? query
                 ? `‘${query}’ 조건을 바꾸거나 다른 직무를 골라 다시 모아 보세요.`
-                : "위에서 직무를 고르면 리멤버·원티드·사람인·잡코리아에서 공고를 모아 옵니다."
+                : "위에서 직무를 고르거나 이력서·자소서를 올린 뒤 ‘내 서류로 공고 수집’을 눌러 보세요."
               : "공고 카드의 북마크를 누르면 여기에 남고, 지원 상태·메모와 함께 저장됩니다."}
           </p>
         </div>
@@ -785,6 +885,7 @@ function JobList(props: HubProps) {
               item={item}
               active={props.selected?.id === item.id}
               fit={props.fits[item.id]}
+              doc={props.docFits[item.id]}
               onSelect={() => props.onSelect(item.id)}
               onToggleSave={() => props.onToggleSave(item.id)}
             />
@@ -983,6 +1084,76 @@ function ApplyKitBlock(props: HubProps & { item: HubJob }) {
   );
 }
 
+function DocMatchBlock({ doc, kit }: { doc: DocMatch | undefined; kit: CareerKit }) {
+  if (!doc || doc.needsKit) {
+    return (
+      <Card className="flex flex-wrap items-center gap-2 px-4 py-3" testId="doc-match-empty">
+        <FolderOpen size={13} className="text-muted" />
+        <span className="text-[11.5px] font-semibold text-ink">내 서류와 이 공고</span>
+        <span className="text-[10px] leading-relaxed text-muted">
+          이력서·자기소개서·포트폴리오를 올리면 이 공고와 맞는 문장·키워드를 짚어 줍니다.
+        </span>
+      </Card>
+    );
+  }
+  return (
+    <Card className="overflow-hidden" testId="doc-match-panel">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
+        <FolderOpen size={13} className="text-muted" />
+        <span className="text-[12px] font-semibold text-ink">내 서류와 맞는 지점</span>
+        <span className="num chip bg-accent-soft px-1.5 py-0 text-[10px] font-semibold text-accent-deep" data-testid="doc-match-score" data-score={doc.score}>
+          서류 적합 {doc.score}%
+        </span>
+        <span className="text-[9.5px] text-faint">{doc.summary}</span>
+        <span className="ml-auto text-[9px] text-faint">이력서·자소서·포폴에서 확인된 말만</span>
+      </div>
+      <div className="grid gap-2 px-4 py-2.5 sm:grid-cols-2">
+        <div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold text-ink-2">공고에서 확인된 서류 키워드</span>
+            <span className="num text-[9px] text-faint">{doc.matched.length}</span>
+          </div>
+          {doc.matched.length ? (
+            <ul className="mt-1 space-y-0.5" data-testid="doc-match-list">
+              {doc.matched.map((match) => (
+                <li key={`${match.doc}-${match.label}`} className="flex items-start gap-1.5 text-[10px] leading-relaxed text-ink-2">
+                  <span className="chip shrink-0 bg-surface px-1.5 py-0 text-[8.5px] text-muted">{DOC_LABEL[match.doc]}</span>
+                  <span className="min-w-0 flex-1 font-medium">{match.label}</span>
+                  <span className="shrink-0 text-[9px] text-faint">{match.where}에서 확인</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-[10px] leading-relaxed text-muted">
+              공고 문장에 서류 키워드가 거의 없습니다. 다른 키워드로 공고를 모으거나 서류에 직무 용어를 더 적어 보세요.
+            </p>
+          )}
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold text-ink-2">서류에서 확인되지 않은 것</div>
+          {doc.gaps.length ? (
+            <ul className="mt-1 space-y-0.5" data-testid="doc-match-gaps">
+              {doc.gaps.map((gap) => (
+                <li key={gap} className="flex items-start gap-1 text-[10px] leading-relaxed text-warn">
+                  <CircleAlert size={9} className="mt-0.5 shrink-0" />
+                  <span className="min-w-0">{gap}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-[10px] leading-relaxed text-muted">공고 요건의 주요 표현이 서류에서 확인됩니다.</p>
+          )}
+          {kit.keywords.length > 0 && (
+            <p className="mt-1.5 text-[9px] leading-relaxed text-faint">
+              검색 키워드 {searchKeywords(kit, 4).map((term) => `‘${term}’`).join(" · ")}
+            </p>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function JobDetail(props: HubProps & { item: HubJob }) {
   const { item } = props;
   const job = item.job;
@@ -1019,11 +1190,6 @@ function JobDetail(props: HubProps & { item: HubJob }) {
       ].join("\n"),
     [docs, duties, item.applyUrl, job.company, job.deadline, job.employmentType, job.experience, job.location, job.role, preferred, requirements],
   );
-
-  const markApplied = () => {
-    props.onUpdate({ ...item, status: "지원완료", saved: true, updatedAt: new Date().toISOString() });
-    props.onNotify(`${job.company || "이 공고"}를 지원완료로 표시했습니다.`);
-  };
 
   return (
     <div className="space-y-3" data-testid="hub-detail">
@@ -1094,12 +1260,21 @@ function JobDetail(props: HubProps & { item: HubJob }) {
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => props.onOpenApply(item)}
+              className="btn btn-primary h-10 px-4 text-[12.5px]"
+              data-testid="apply-open"
+              title="맞춤 문구를 확인하고 제출한 뒤 지원 완료로 기록합니다"
+            >
+              <Send size={14} /> 바로 지원하기
+            </button>
             {item.applyUrl ? (
               <a
                 href={item.applyUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="btn btn-accent h-10 px-4 text-[12.5px]"
+                className="btn btn-outline h-10 px-3 text-[11.5px]"
                 data-testid="apply-link"
                 data-url={item.applyUrl}
               >
@@ -1127,25 +1302,6 @@ function JobDetail(props: HubProps & { item: HubJob }) {
                 사람인 상세는 로그인 후 본문이 열립니다 — 원문에서 확인하세요
               </span>
             )}
-            {item.status === "지원 전" && (
-              <button
-                type="button"
-                onClick={() => {
-                  props.onUpdate({ ...item, status: "준비중", saved: true, updatedAt: new Date().toISOString() });
-                  props.onNotify("지원 준비를 시작했습니다. 아래 지원 문구를 다듬어 지원서에 붙여넣으세요.");
-                  window.setTimeout(() => document.querySelector("[data-testid=hub-apply-kit]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
-                }}
-                className="btn btn-outline h-10 px-3 text-[11.5px]"
-                data-testid="prepare-start"
-              >
-                <Sparkles size={13} /> 지원 준비
-              </button>
-            )}
-            {(item.status === "지원 전" || item.status === "준비중") && (
-              <button type="button" onClick={markApplied} className="btn btn-outline h-10 px-3 text-[11.5px]" data-testid="mark-applied">
-                <Check size={13} /> 지원완료로 표시
-              </button>
-            )}
             <button
               type="button"
               onClick={() => props.onToggleSave(item.id)}
@@ -1160,6 +1316,21 @@ function JobDetail(props: HubProps & { item: HubJob }) {
               <Trash2 size={12} /> 빼기
             </button>
           </div>
+
+          {item.applied && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-ok/25 bg-ok-soft/50 px-2.5 py-1.5" data-testid="apply-recorded-detail">
+              <BadgeCheck size={12} className="text-ok" />
+              <span className="text-[10px] font-semibold text-ok">지원 기록</span>
+              <span className="num text-[9.5px] text-ink-2">{stampOf(item.applied.at)}</span>
+              <span className="chip bg-surface px-1.5 py-0 text-[9px] text-muted">{VIA_TEXT[item.applied.via]}</span>
+              <span className="min-w-0 truncate text-[9px] text-muted">
+                제출 서류 {item.applied.documents.length ? item.applied.documents.join(" · ") : "기록 없음"}
+              </span>
+              <button type="button" onClick={() => props.onOpenApply(item)} className="btn btn-ghost ml-auto h-6 px-1.5 text-[9.5px] text-muted" data-testid="apply-recorded-open">
+                기록 보기
+              </button>
+            </div>
+          )}
 
           <p className="mt-1.5 truncate text-[9.5px] text-faint" title={item.applyUrl}>
             원문 · {item.applyUrl || "없음"}
@@ -1188,6 +1359,8 @@ function JobDetail(props: HubProps & { item: HubJob }) {
         saved={props.profileSaved}
         onEditProfile={props.onEditProfile}
       />
+
+      <DocMatchBlock doc={props.docFits[item.id]} kit={props.careerKit} />
 
       <Card className="overflow-hidden" testId="hub-requirements">
         <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2.5">
@@ -1267,10 +1440,15 @@ export function Hub(props: HubProps) {
     const fit = props.fits[job.id];
     return Boolean(fit && !fit.needsProfile && fit.score >= 75 && job.source.kind === "auto" && !isTrackedJob(job));
   }).length;
+  const docStrong = props.jobs.filter((job) => {
+    const match = props.docFits[job.id];
+    return Boolean(match && !match.needsKit && match.score >= 75 && job.source.kind === "auto" && !isTrackedJob(job));
+  }).length;
 
   const metrics = [
     { label: "수집", value: feedCount },
     { label: "적합 75%+", value: strongFit },
+    ...(kitReady(props.careerKit) ? [{ label: "서류 적합 75%+", value: docStrong }] : []),
     { label: "담음", value: savedCount },
     { label: "마감 3일", value: closingSoon },
   ];
@@ -1281,7 +1459,7 @@ export function Hub(props: HubProps) {
         <div className="min-w-0">
           <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-ink">공고 허브</h1>
           <p className="mt-0.5 text-[10.5px] text-muted">
-            공고는 알아서 모으고, 지원은 여기서 — 서울 인하우스 홍보·PR 기본 수집
+            공고는 알아서 모으고, 지원은 여기서 — 이력서·자소서·포폴을 올리면 그 서류로 모으고 대조합니다
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -1294,16 +1472,21 @@ export function Hub(props: HubProps) {
         </div>
       </div>
 
-      <WorkspaceHeader
+      <CareerKitPanel
         resume={props.resume}
         resumeMeta={props.resumeMeta}
         resumeBusy={props.resumeBusy}
-        onResumeFile={props.onResumeFile}
-        onOpenResume={props.onOpenResume}
-        onSampleResume={props.onSampleResume}
+        kit={props.careerKit}
         profile={props.profile}
         profileSaved={props.profileSaved}
-        onEditProfile={props.onEditProfile}
+        onDocFile={props.onDocFile}
+        onRemoveDoc={props.onRemoveDoc}
+        onPortfolioUrl={props.onPortfolioUrl}
+        onOpenResume={props.onOpenResume}
+        onSampleResume={props.onSampleResume}
+        onOpenProfile={props.onEditProfile}
+        onCollectDocs={props.onCollectDocs}
+        collecting={props.collectingDocs}
       />
 
       <CollectionBar {...props} />

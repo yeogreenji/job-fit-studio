@@ -226,6 +226,8 @@ export interface JobSource {
   sourceJobId?: string;
   /** 수집기가 본문까지 읽었는지 */
   detailLevel?: "full" | "list";
+  /** 내 서류 키워드 수집 — 이 공고에 걸린 키워드 */
+  hitKeywords?: string[];
 }
 
 /** 처우 협상 스크립트 묶음 */
@@ -501,6 +503,96 @@ export interface HubJob {
   draft?: ApplyDraft;
   /** 보드에 담아 둔 공고 (자동 수집분은 담아야 브라우저에 남습니다) */
   saved?: boolean;
+  /** ‘바로 지원하기’에서 기록한 접수 내용 (지원완료로 옮길 때 남깁니다) */
+  applied?: ApplyRecord;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 접수 기록 — 언제, 어떤 서류로, 어느 경로로 지원했는지 */
+export interface ApplyRecord {
+  at: string;
+  via: "site" | "email" | "other";
+  /** 제출한 서류 이름 (이력서·자기소개서·포트폴리오·공고 제출서류 체크) */
+  documents: string[];
+  /** 접수 때 쓴 한 줄 어필 — 기록에서 다시 확인합니다 */
+  oneLiner?: string;
+  memo?: string;
+}
+
+/* ── 커리어 서류 3종 (이력서 · 자기소개서 · 포트폴리오) ── */
+
+export type CareerDocKind = "resume" | "cover" | "portfolio";
+
+/** 업로드한 서류 한 건의 메타데이터와 추출 요약 (원문 전체는 저장하지 않습니다) */
+export interface CareerDoc {
+  kind: CareerDocKind;
+  fileName: string;
+  /** 파일에서 읽은 글자 수 */
+  chars: number;
+  /** PDF 쪽수 (PDF일 때만) */
+  pages?: number;
+  uploadedAt: string;
+  /** 문서에서 확인된 한 줄 요약 */
+  summary: string;
+  /** 문서에 실제로 있는 직무 키워드 */
+  keywords: string[];
+  /** 대표 성과·프로젝트 문장 (포트폴리오·자소서) */
+  highlights: string[];
+  /** 포트폴리오에서 읽은 프로젝트 이름 */
+  projects?: string[];
+}
+
+/** 이력서·자소서·포트폴리오에서 뽑은 검색 재료 묶음 */
+export interface CareerKit {
+  docs: Record<CareerDocKind, CareerDoc | null>;
+  /** 포트폴리오 링크 (파일 없이 링크만 있어도 됨) */
+  portfolioUrl: string;
+  /** 세 서류에서 모은 검색 키워드 (많이 나온 순) */
+  keywords: string[];
+  /** 키워드가 어느 서류에서 나왔는지 */
+  keywordDocs: Record<string, CareerDocKind[]>;
+  /** 대표 직무 */
+  role: string;
+  /** 경력 연차 */
+  years: number | null;
+  /** 화면에 보여 줄 통합 요약 */
+  summary: string;
+  updatedAt: string;
+}
+
+/** 서류와 공고가 맞은 지점 — 어느 서류의 어떤 말이 공고 어디에 있었는지 */
+export interface DocMatchReason {
+  label: string;
+  doc: CareerDocKind;
+  where: "직무" | "담당 업무" | "자격 요건" | "우대 사항" | "태그";
+}
+
+/** 한 공고를 내 서류와 대조한 결과 */
+export interface DocMatch {
+  score: number;
+  matched: DocMatchReason[];
+  /** 공고가 요구하는데 서류에서 확인되지 않은 것 */
+  gaps: string[];
+  summary: string;
+  /** 서류가 없어 계산하지 못했는지 */
+  needsKit: boolean;
+}
+
+/** ‘바로 지원하기’에서 만드는 제출용 묶음 */
+export interface ApplyPacket {
+  oneLiner: string;
+  /** 자소서 핵심 문단 (문단 2~3개) */
+  coverParagraph: string;
+  emailSubject: string;
+  emailBody: string;
+  /** 공고에서 찾은 지원 이메일 (없으면 빈 문자열) */
+  emailTo: string;
+  /** 붙일 서류 목록과 준비 상태 */
+  documents: { label: string; ready: boolean; note: string }[];
+  attachments: string[];
+  /** 지원서·이메일에 그대로 붙일 전체 묶음 */
+  fullText: string;
+  /** 사실대로 안내할 문장 (로그인·양식은 직접) */
+  notes: string[];
 }

@@ -1,5 +1,6 @@
-import type { AiConfig, ApplicationEntry, ApplyStatus, CareerProfile, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
+import type { AiConfig, ApplicationEntry, ApplyStatus, CareerDoc, CareerDocKind, CareerKit, CareerProfile, HubJob, JobPackage, MasterResume, NegotiationItem, PriorityId, Stage } from "../types";
 import { EMPTY_PROFILE } from "./career";
+import { EMPTY_KIT } from "./careerKit";
 import { EMPTY_RESUME } from "./presets";
 import { isTrackedJob } from "./collect";
 
@@ -284,13 +285,23 @@ export function loadHubJobs(): HubJob[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((item) => item && typeof item.id === "string" && item.job && typeof item.job === "object")
-      .map((item) => ({
+      .map((item): HubJob => ({
         ...item,
         applyUrl: item.applyUrl || item.job.applyUrl || item.source?.url || "",
         status: APPLY_STATUS_VALUES.includes(item.status) ? item.status : "지원 전",
         memo: typeof item.memo === "string" ? item.memo : "",
         saved: Boolean(item.saved),
         documentsChecked: Array.isArray(item.documentsChecked) ? item.documentsChecked.filter((value) => typeof value === "string") : [],
+        applied:
+          item.applied && typeof item.applied.at === "string"
+            ? {
+                at: item.applied.at,
+                via: item.applied.via === "email" || item.applied.via === "other" ? item.applied.via : "site",
+                documents: Array.isArray(item.applied.documents) ? item.applied.documents.filter((value) => typeof value === "string") : [],
+                oneLiner: typeof item.applied.oneLiner === "string" ? item.applied.oneLiner : undefined,
+                memo: typeof item.applied.memo === "string" ? item.applied.memo : undefined,
+              }
+            : undefined,
         job: {
           ...item.job,
           documents: item.job.documents ?? "",
@@ -360,5 +371,76 @@ export function persistCareerProfile(profile: CareerProfile) {
     localStorage.setItem(CAREER_KEY, JSON.stringify(profile));
   } catch {
     /* ignore */
+  }
+}
+
+/* ── 커리어 서류 3종 (이력서 · 자기소개서 · 포트폴리오) ── */
+
+const KIT_KEY = "jobfit.careerkit.v1";
+const DOC_KIND_VALUES: CareerDocKind[] = ["resume", "cover", "portfolio"];
+
+const stringsOfLength = (value: unknown, max: number, limit = 80): string[] =>
+  Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim().slice(0, limit) : ""))
+        .filter(Boolean)
+        .slice(0, max)
+    : [];
+
+const docOf = (value: unknown, kind: CareerDocKind): CareerDoc | null => {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<CareerDoc>;
+  if (typeof item.fileName !== "string" || !item.fileName) return null;
+  return {
+    kind,
+    fileName: item.fileName.slice(0, 120),
+    chars: typeof item.chars === "number" && Number.isFinite(item.chars) ? Math.max(0, Math.round(item.chars)) : 0,
+    pages: typeof item.pages === "number" && Number.isFinite(item.pages) ? Math.round(item.pages) : undefined,
+    uploadedAt: typeof item.uploadedAt === "string" ? item.uploadedAt : new Date().toISOString(),
+    summary: typeof item.summary === "string" ? item.summary.slice(0, 300) : "",
+    keywords: stringsOfLength(item.keywords, 12, 24),
+    highlights: stringsOfLength(item.highlights, 4, 160),
+    projects: stringsOfLength(item.projects, 6, 60),
+  };
+};
+
+/** 업로드한 서류의 메타데이터·요약만 저장합니다 (원문 전체는 저장하지 않습니다). */
+export function loadCareerKit(): CareerKit {
+  try {
+    const raw = localStorage.getItem(KIT_KEY);
+    if (!raw) return { ...EMPTY_KIT, docs: { resume: null, cover: null, portfolio: null } };
+    const parsed = JSON.parse(raw) as Partial<CareerKit>;
+    if (!parsed || typeof parsed !== "object") return { ...EMPTY_KIT, docs: { resume: null, cover: null, portfolio: null } };
+    const docs = (parsed.docs ?? {}) as Record<string, unknown>;
+    const restored = DOC_KIND_VALUES.reduce(
+      (acc, kind) => ({ ...acc, [kind]: docOf(docs[kind], kind) }),
+      {} as Record<CareerDocKind, CareerDoc | null>,
+    );
+    const keywordDocsRaw = (parsed.keywordDocs ?? {}) as Record<string, unknown>;
+    const keywordDocs: Record<string, CareerDocKind[]> = {};
+    for (const [key, value] of Object.entries(keywordDocsRaw)) {
+      const list = Array.isArray(value) ? value.filter((kind): kind is CareerDocKind => DOC_KIND_VALUES.includes(kind as CareerDocKind)) : [];
+      if (key && list.length) keywordDocs[key.slice(0, 24)] = list;
+    }
+    return {
+      docs: restored,
+      portfolioUrl: typeof parsed.portfolioUrl === "string" ? parsed.portfolioUrl.trim().slice(0, 300) : "",
+      keywords: stringsOfLength(parsed.keywords, 12, 24),
+      keywordDocs,
+      role: typeof parsed.role === "string" ? parsed.role.trim().slice(0, 40) : "",
+      years: typeof parsed.years === "number" && Number.isFinite(parsed.years) && parsed.years > 0 ? Math.round(parsed.years) : null,
+      summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 200) : "",
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    };
+  } catch {
+    return { ...EMPTY_KIT, docs: { resume: null, cover: null, portfolio: null } };
+  }
+}
+
+export function persistCareerKit(kit: CareerKit) {
+  try {
+    localStorage.setItem(KIT_KEY, JSON.stringify(kit));
+  } catch {
+    /* 저장 공간이 없으면 조용히 넘어갑니다 */
   }
 }
