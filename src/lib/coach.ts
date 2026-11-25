@@ -82,7 +82,7 @@ export function buildLocalIntro(
   const topKeywords = match.keywords
     .filter((k) => k.status !== "missing")
     .sort((a, b) => b.weight * b.coverage - a.weight * a.coverage)
-    .slice(0, 3)
+    .slice(0, 2)
     .map((k) => k.label);
   const companyLabel = job.company.trim() || "지원 기업";
   const roleLabel = job.role.trim() || resume.headline || "해당 직무";

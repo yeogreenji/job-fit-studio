@@ -1,7 +1,7 @@
 import type { PlanId, PlanState } from "../types";
 
 /**
- * 요금제 — Free / Pro / 3개월 이직 패스.
+ * 요금제 — Free / 1개월 집중 / 3개월 이직 패스 / 프리미엄 커리어 패스.
  *
  * 결제는 아직 붙이지 않았습니다. 이 파일은 ‘무엇이 어느 플랜에 열리는지’만 정의하고,
  * 화면에서는 데모 활성화(무료 체험)로 같은 상태를 만들어 실제 잠금 동작을 확인합니다.
@@ -11,7 +11,8 @@ import type { PlanId, PlanState } from "../types";
 export const PLAN_KEY = "jobfit.plan.v1";
 
 export const TRIAL_DAYS = 14;
-export const PASS_DAYS = 90;
+/** 기간제 상품의 이용 일수 */
+export const PLAN_DAYS: Record<PlanId, number> = { free: 0, focus: 30, pass: 90, premium: 180 };
 /** Free에서 담아 둘 수 있는 공고 수 */
 export const FREE_PIPELINE_LIMIT = 5;
 
@@ -33,6 +34,8 @@ export interface PlanMeta {
   bullets: string[];
   popular?: boolean;
   cta: string;
+  /** 카드 위 작은 표시 (기간·대상) */
+  badge?: string;
 }
 
 export const PLANS: PlanMeta[] = [
@@ -42,67 +45,96 @@ export const PLANS: PlanMeta[] = [
     price: 0,
     priceLabel: "0원",
     period: "계속 무료",
-    tagline: "공고를 모으고, 내 기준으로 점수를 봅니다",
+    tagline: "공고를 모으고, 내 이력서 기준으로 점수를 봅니다",
     bullets: [
-      "리멤버·원티드·사람인·잡코리아 실시간 자동 수집",
-      "커리어 프로필 기반 적합도 0~100%와 산출 근거",
-      "이력서·자소서·포폴 3종 허브와 프로필 자동 채움",
-      "내 서류로 공고 수집·서류 적합 대조",
-      "한 줄 어필·자소서 핵심 문단·바로 지원하기",
+      "리멤버·원티드·사람인·잡코리아 실시간 수집",
+      "이력서 업로드 → 프로필 자동 채움 → 맞춤 공고 자동 수집",
+      "적합도 0~100%와 산출 근거 · 서류 대조",
+      "한 줄 어필·지원 동기·바로 지원하기",
       "지원 파이프라인 5건까지",
     ],
     cta: "무료로 사용 중",
+    badge: "기본",
   },
   {
-    id: "pro",
-    name: "Pro",
-    price: 19900,
-    priceLabel: "월 19,900원",
-    period: "월 구독 · 언제든 해지",
-    tagline: "지원서 한 건을 끝까지 끌고 갑니다",
+    id: "focus",
+    name: "1개월 집중",
+    price: 49000,
+    priceLabel: "49,000원",
+    period: "1개월 · 1회 결제",
+    tagline: "지원서 서너 건을 몰아서 끝내는 한 달",
     bullets: [
       "Free의 모든 기능",
       "지원 패키지 4종 전체 — 어필 3선·1분 자기소개·면접 질문 5·연봉 협상",
-      "AI 문장 다듬기(Gemini) 무제한",
-      "90초 면접 연습과 답변 평가, 역질문",
+      "AI 문장 다듬기 무제한",
+      "90초 면접 연습과 답변 평가",
       "지원 파이프라인 무제한 · MD/인쇄 내보내기",
     ],
-    popular: true,
-    cta: "Pro 무료 체험",
+    cta: "1개월 시작 (데모)",
+    badge: "단기",
   },
   {
     id: "pass",
     name: "3개월 이직 패스",
-    price: 49000,
-    priceLabel: "49,000원",
-    period: "3개월 1회 결제",
-    tagline: "이직 한 번에 집중하는 기간제",
+    price: 119000,
+    priceLabel: "119,000원",
+    period: "3개월 · 1회 결제",
+    tagline: "이직을 끝낼 때까지 쓰는 3개월",
     bullets: [
-      "Pro와 같은 기능 전부",
-      "3개월 동안 무제한 지원 준비",
-      "월 16,333원꼴 — 구독보다 18% 저렴",
+      "1개월 집중의 모든 기능",
+      "3개월 동안 지원 준비 무제한",
+      "월 39,667원꼴 — 1개월씩 세 번 결제보다 20% 저렴",
       "기간이 끝나면 자동으로 Free로 돌아감",
     ],
-    cta: "패스 활성화 (데모)",
+    popular: true,
+    cta: "3개월 패스 시작 (데모)",
+    badge: "가장 많이 고름",
+  },
+  {
+    id: "premium",
+    name: "프리미엄 커리어 패스",
+    price: 249000,
+    priceLabel: "249,000원",
+    period: "6개월 · 1회 결제",
+    tagline: "연봉 협상과 심층 분석까지, 반년 동안",
+    bullets: [
+      "3개월 이직 패스의 모든 기능",
+      "6개월 이용 — 이직·연봉 협상 두 번의 기회",
+      "연봉 협상·심층 분석 무제한",
+      "지원 현황 전체 내보내기(CSV) — 회사·직무·상태·마감·메모",
+      "새 기능 우선 공개",
+    ],
+    cta: "프리미엄 시작 (데모)",
+    badge: "장기",
   },
 ];
 
 export const planById = (id: PlanId): PlanMeta => PLANS.find((plan) => plan.id === id) ?? PLANS[0];
 
-const FEATURE_ROWS: { label: string; hint: string; free: string; pro: string; pass: string }[] = [
-  { label: "공고 자동 수집", hint: "리멤버·원티드·사람인·잡코리아", free: "무제한", pro: "무제한", pass: "무제한" },
-  { label: "적합도·산출 근거", hint: "직무·키워드·연차·조건·연봉", free: "포함", pro: "포함", pass: "포함" },
-  { label: "PDF·TXT 이력서 → 프로필", hint: "직무·연차·키워드·요약 자동 채움", free: "포함", pro: "포함", pass: "포함" },
-  { label: "커리어 서류 3종", hint: "이력서·자소서·포폴 업로드·요약", free: "3종", pro: "3종", pass: "3종" },
-  { label: "내 서류로 공고 수집·대조", hint: "서류 키워드 검색·적합도", free: "포함", pro: "포함", pass: "포함" },
-  { label: "바로 지원하기·접수 기록", hint: "맞춤 문구·제출 시각·서류", free: "포함", pro: "포함", pass: "포함" },
-  { label: "한 줄 어필·지원서 초안", hint: "규칙 엔진", free: "포함", pro: "포함", pass: "포함" },
-  { label: "지원 패키지 4종", hint: "어필 3선·자기소개·면접 5·협상", free: "첫 항목만", pro: "전체", pass: "전체" },
-  { label: "AI 문장 다듬기", hint: "Gemini로 다시 쓰기", free: "—", pro: "무제한", pass: "무제한" },
-  { label: "연봉 협상 스크립트", hint: "첫 제안·차액 대응·비연봉 카드", free: "—", pro: "포함", pass: "포함" },
-  { label: "90초 면접 연습", hint: "답변 평가·역질문", free: "—", pro: "포함", pass: "포함" },
-  { label: "지원 파이프라인", hint: "담아 둔 공고 관리", free: "5건까지", pro: "무제한", pass: "무제한" },
-  { label: "MD·인쇄 내보내기", hint: "지원 패키지 출력", free: "지원 문구만", pro: "포함", pass: "포함" },
+export interface FeatureRow {
+  label: string;
+  hint: string;
+  free: string;
+  focus: string;
+  pass: string;
+  premium: string;
+}
+
+const ALL = "포함";
+
+export const FEATURE_ROWS: FeatureRow[] = [
+  { label: "공고 자동 수집", hint: "리멤버·원티드·사람인·잡코리아", free: "무제한", focus: "무제한", pass: "무제한", premium: "무제한" },
+  { label: "이력서 → 프로필 자동 채움", hint: "AI·규칙으로 직무·연차·키워드 추출", free: ALL, focus: ALL, pass: ALL, premium: ALL },
+  { label: "내 이력서 기준 공고 자동 수집", hint: "업로드 즉시 맞춤 공고와 대조", free: ALL, focus: ALL, pass: ALL, premium: ALL },
+  { label: "적합도·산출 근거", hint: "직무·키워드·연차·조건·연봉", free: ALL, focus: ALL, pass: ALL, premium: ALL },
+  { label: "바로 지원하기·접수 기록", hint: "맞춤 문구·제출 시각·서류", free: ALL, focus: ALL, pass: ALL, premium: ALL },
+  { label: "지원 패키지 4종", hint: "어필 3선·자기소개·면접 5·협상", free: "첫 항목만", focus: "전체", pass: "전체", premium: "전체" },
+  { label: "AI 문장 다듬기", hint: "Gemini로 다시 쓰기", free: "—", focus: "무제한", pass: "무제한", premium: "무제한" },
+  { label: "연봉 협상 스크립트", hint: "첫 제안·차액 대응·비연봉 카드", free: "—", focus: ALL, pass: ALL, premium: "무제한" },
+  { label: "90초 면접 연습", hint: "답변 평가·역질문", free: "—", focus: ALL, pass: ALL, premium: "무제한" },
+  { label: "지원 파이프라인", hint: "담아 둔 공고 관리", free: "5건까지", focus: "무제한", pass: "무제한", premium: "무제한" },
+  { label: "MD·인쇄 내보내기", hint: "지원 패키지 출력", free: "지원 문구만", focus: ALL, pass: ALL, premium: ALL },
+  { label: "지원 현황 전체 내보내기", hint: "CSV — 회사·상태·마감·메모", free: "—", focus: "—", pass: "—", premium: ALL },
 ];
 
 export const FEATURES = FEATURE_ROWS;
@@ -110,33 +142,39 @@ export const FEATURES = FEATURE_ROWS;
 export const FAQ: { q: string; a: string }[] = [
   {
     q: "지금 결제가 되나요?",
-    a: "아직 결제(PG) 연동 전입니다. 그래서 지금은 ‘Pro 무료 체험(데모)’으로 Pro 기능을 먼저 열어 확인할 수 있게 두었습니다. 실제 카드 결제는 붙이지 않았고, 이 화면에서 어떤 결제도 일어나지 않습니다.",
+    a: "아직 결제(PG) 연동 전입니다. 그래서 지금은 ‘14일 무료 체험’으로 유료 기능을 먼저 열어 확인할 수 있게 두었습니다. 실제 카드 결제는 붙이지 않았고, 이 화면에서 어떤 결제도 일어나지 않습니다.",
+  },
+  {
+    q: "왜 3개월 패스가 119,000원인가요?",
+    a: "지원서 한 건을 제대로 준비하는 데 드는 시간과 비교해 정한 가격입니다. 공고 수집·적합도·이력서 분석은 계속 무료이고, 유료는 지원서를 끝까지 끌고 가는 기능(패키지 4종·AI 다듬기·면접 연습·무제한 관리)입니다. 1개월 49,000원을 세 번 결제하면 147,000원이라 3개월 패스가 20% 저렴합니다.",
   },
   {
     q: "Free로 어디까지 할 수 있나요?",
-    a: "공고 자동 수집, 적합도와 산출 근거, 이력서·자소서·포폴 3종 업로드와 서류 기반 수집·대조, 한 줄 어필·자소서 핵심 문단, 바로 지원하기와 접수 기록, 지원 파이프라인 5건까지는 계속 무료입니다.",
+    a: "이력서 업로드와 프로필 자동 채움, 내 이력서 기준 공고 자동 수집, 적합도와 근거, 한 줄 어필·지원 동기, 바로 지원하기와 접수 기록, 지원 파이프라인 5건까지는 계속 무료입니다.",
   },
   {
-    q: "Pro와 3개월 이직 패스는 무엇이 다른가요?",
-    a: "기능은 같습니다. Pro는 월 19,900원 구독이고, 패스는 49,000원을 한 번 결제해 3개월 쓰는 방식(월 16,333원꼴)입니다. 이직을 3개월 안에 끝낼 계획이면 패스가, 기간이 유동적이면 Pro가 맞습니다.",
-  },
-  {
-    q: "쿠폰이나 할인은 있나요?",
-    a: "아직 없습니다. 결제 연동과 함께 첫 달 할인·이직 시즌 쿠폰을 넣을 예정이고, 그때 이 화면에 조건을 그대로 적습니다.",
+    q: "프리미엄은 무엇이 다른가요?",
+    a: "기간이 6개월이고, 연봉 협상과 심층 분석을 무제한으로 씁니다. 지원 현황 전체를 CSV로 내려받아 엑셀에서 관리할 수 있습니다. 1개월 집중·3개월 패스의 기능은 모두 들어 있습니다.",
   },
   {
     q: "해지하면 어떻게 되나요?",
-    a: "Free로 돌아가고, 담아 둔 공고·프로필·이력서는 그대로 남습니다. 다만 5건을 넘는 파이프라인 카드는 읽기만 되고 새로 담을 수 없습니다.",
+    a: "기간이 끝나면 Free로 돌아가고, 담아 둔 공고·프로필·이력서는 그대로 남습니다. 다만 5건을 넘는 파이프라인 카드는 읽기만 되고 새로 담을 수 없습니다.",
   },
   {
     q: "내 이력서는 어디에 저장되나요?",
-    a: "이 브라우저(localStorage)에만 저장됩니다. 서버에 이력서를 보관하지 않고, AI를 쓸 때만 요청 본문으로 전달합니다.",
+    a: "이 브라우저(localStorage)에만 저장됩니다. 서버에 이력서를 보관하지 않고, 프로필 추출·문장 생성을 요청할 때만 본문을 전송합니다.",
   },
 ];
 
 /* ── 상태 ── */
 
-const isPlanId = (value: unknown): value is PlanId => value === "free" || value === "pro" || value === "pass";
+const PLAN_IDS: PlanId[] = ["free", "focus", "pass", "premium"];
+
+/** 예전 저장값(pro)을 새 상품(1개월 집중)으로 옮깁니다. */
+const migrateId = (value: unknown): PlanId => {
+  if (value === "pro") return "focus";
+  return PLAN_IDS.includes(value as PlanId) ? (value as PlanId) : "free";
+};
 
 const addDays = (iso: string, days: number): string => {
   const base = new Date(iso);
@@ -145,16 +183,17 @@ const addDays = (iso: string, days: number): string => {
   return base.toISOString();
 };
 
-/** 기간이 끝난 패스·체험은 Free로 되돌립니다. */
+/** 기간이 끝난 유료 기간제·체험은 Free로 되돌립니다. */
 export function normalizePlan(state: PlanState | null | undefined): PlanState {
-  if (!state || !isPlanId(state.plan)) return { ...EMPTY_PLAN };
+  if (!state) return { ...EMPTY_PLAN };
+  const plan = migrateId((state as { plan?: unknown }).plan);
+  if (plan === "free") return { ...EMPTY_PLAN };
   const expires = state.expiresAt;
-  if ((state.plan === "pass" || state.trial) && expires && new Date(expires).getTime() < Date.now()) {
-    return { ...EMPTY_PLAN };
-  }
+  const trial = Boolean(state.trial);
+  if (expires && new Date(expires).getTime() < Date.now()) return { ...EMPTY_PLAN };
   return {
-    plan: state.plan,
-    trial: Boolean(state.trial && state.plan === "pro"),
+    plan,
+    trial,
     startedAt: typeof state.startedAt === "string" ? state.startedAt : "",
     expiresAt: typeof expires === "string" && expires ? expires : null,
   };
@@ -178,14 +217,14 @@ export function persistPlan(state: PlanState) {
   }
 }
 
-/** 데모 활성화 — 결제 없이 Pro 상태를 만듭니다 (14일) */
+/** 데모 활성화 — 결제 없이 14일 동안 유료 기능(3개월 패스와 같은 범위)을 엽니다. */
 export function activateTrial(now = new Date().toISOString()): PlanState {
-  return { plan: "pro", trial: true, startedAt: now, expiresAt: addDays(now, TRIAL_DAYS) };
+  return { plan: "pass", trial: true, startedAt: now, expiresAt: addDays(now, TRIAL_DAYS) };
 }
 
-/** 데모 활성화 — 3개월 이직 패스 (90일) */
-export function activatePass(now = new Date().toISOString()): PlanState {
-  return { plan: "pass", trial: false, startedAt: now, expiresAt: addDays(now, PASS_DAYS) };
+/** 데모 활성화 — 상품 기간만큼 엽니다. */
+export function activatePlan(id: Exclude<PlanId, "free">, now = new Date().toISOString()): PlanState {
+  return { plan: id, trial: false, startedAt: now, expiresAt: addDays(now, PLAN_DAYS[id]) };
 }
 
 export function deactivatePlan(): PlanState {
@@ -201,26 +240,30 @@ export interface PlanFeatures {
   negotiation: boolean;
   /** 90초 면접 연습·심층 준비 */
   deepPrep: boolean;
+  /** 지원 현황 전체 CSV 내보내기 (프리미엄) */
+  deskExport: boolean;
   /** 담을 수 있는 공고 수 */
   pipelineLimit: number;
 }
 
 export function featuresOf(state: PlanState): PlanFeatures {
   const normalized = normalizePlan(state);
-  const paid = normalized.plan === "pro" || normalized.plan === "pass";
+  const paid = normalized.plan !== "free";
   return {
     fullKit: paid,
     aiRefine: paid,
     negotiation: paid,
     deepPrep: paid,
+    deskExport: normalized.plan === "premium",
     pipelineLimit: paid ? Number.POSITIVE_INFINITY : FREE_PIPELINE_LIMIT,
   };
 }
 
 export function planLabel(state: PlanState): string {
   const normalized = normalizePlan(state);
-  if (normalized.plan === "pro") return normalized.trial ? "Pro 체험" : "Pro";
-  if (normalized.plan === "pass") return "이직 패스";
+  if (normalized.plan === "focus") return normalized.trial ? "무료 체험" : "1개월 집중";
+  if (normalized.plan === "pass") return normalized.trial ? "무료 체험" : "이직 패스";
+  if (normalized.plan === "premium") return "프리미엄";
   return "Free";
 }
 

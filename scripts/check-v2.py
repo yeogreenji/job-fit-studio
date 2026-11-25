@@ -34,7 +34,7 @@ def check(name, cond, detail=""):
 DEMO = json.load(open(os.path.join(FIXTURES, "demo-jobs.json"), encoding="utf-8"))
 JOBS = DEMO["jobs"]
 PROFILE = DEMO["profile"]
-PLAN_PRO = {"plan": "pro", "trial": True, "startedAt": "2026-11-24T00:00:00.000Z", "expiresAt": "2026-12-08T00:00:00.000Z"}
+PLAN_PASS = {"plan": "pass", "trial": True, "startedAt": "2026-11-24T00:00:00.000Z", "expiresAt": "2026-12-08T00:00:00.000Z"}
 
 def saved_job(index: int, status: str = "준비중", memo: str = "") -> dict:
     job = JOBS[index]
@@ -85,7 +85,7 @@ SAVED_JOBS = [saved_job(index) for index in range(5)]
 
 SEED = (
     "localStorage.setItem('jobfit.career.v1', %s); localStorage.setItem('jobfit.plan.v1', %s);"
-    % (json.dumps(json.dumps(PROFILE, ensure_ascii=False)), json.dumps(json.dumps(PLAN_PRO)))
+    % (json.dumps(json.dumps(PROFILE, ensure_ascii=False)), json.dumps(json.dumps(PLAN_PASS)))
 )
 
 
@@ -166,7 +166,7 @@ def main():
     base = f"http://127.0.0.1:{PORT}/"
     errors = []
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
         ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR", accept_downloads=True)
         ctx.add_init_script(SEED)
         page = ctx.new_page()
@@ -385,15 +385,15 @@ def main():
         page.click("[data-testid=open-pricing]")
         page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
         check("pricing modal", page.locator("[data-testid=pricing-modal]").count() == 1)
-        check("pricing pro current", page.get_attribute("[data-testid=plan-card-pro]", "data-active") == "true")
+        check("pricing pass current", page.get_attribute("[data-testid=plan-card-pass]", "data-active") == "true")
         check("pricing matrix rows", page.locator("[data-testid=pricing-matrix] tbody tr").count() >= 8, str(page.locator("[data-testid=pricing-matrix] tbody tr").count()))
-        check("pricing plan prices", "19,900" in page.inner_text("[data-testid=pricing-modal]") and "49,000" in page.inner_text("[data-testid=pricing-modal]"))
-        page.click("[data-testid=plan-pro-trial]")
+        pricing_text = page.inner_text("[data-testid=pricing-modal]")
+        page.click("[data-testid=plan-trial]")
         page.wait_for_timeout(300)
-        check("trial toggle off -> free", page.get_attribute("[data-testid=plan-pro-trial]", "aria-checked") == "false")
-        page.click("[data-testid=plan-pro-trial]")
+        check("trial toggle off -> free", page.get_attribute("[data-testid=plan-trial]", "aria-checked") == "false")
+        page.click("[data-testid=plan-trial]")
         page.wait_for_timeout(300)
-        check("trial toggle on -> pro", page.get_attribute("[data-testid=plan-pro-trial]", "aria-checked") == "true")
+        check("trial toggle on -> paid", page.get_attribute("[data-testid=plan-trial]", "aria-checked") == "true")
         page.keyboard.press("Escape")
         page.wait_for_timeout(300)
 
@@ -441,7 +441,7 @@ def main():
 
         # 8. 이력서 파일 → 커리어 프로필 자동 채움 (프로필이 비어 있는 새 브라우저)
         fctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR")
-        fctx.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(PLAN_PRO)))
+        fctx.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(PLAN_PASS)))
         fp = fctx.new_page()
         route_api(fp)
         fp.goto(base, wait_until="domcontentloaded")

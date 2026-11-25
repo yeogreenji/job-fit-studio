@@ -64,6 +64,48 @@ function jobExtractPayload(user = "") {
   };
 }
 
+/** 이력서 프로필 스텁: 본문에 실제로 있는 값만 돌려줍니다. */
+function resumeProfilePayload(user) {
+  const body = user.split("[이력서 본문]")[1] ?? "";
+  const yearsMatch = body.match(/경력\s*:?\s*(\d{1,2})\s*년/) ?? body.match(/(\d{1,2})년차/);
+  const years = yearsMatch ? Number(yearsMatch[1]) : 0;
+  const role = ((body.match(/한 줄 소개:\s*(.+)/) ?? [])[1] ?? "").trim().slice(0, 30);
+  const skillBlock = (body.split("스킬")[1] ?? "").split("산업")[0] ?? "";
+  const skills = skillBlock
+    .split(/[,\n]/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2 && body.includes(term));
+  const known = ["브랜드 캠페인", "SNS 운영", "인플루언서 마케팅", "콘텐츠 기획", "성과 분석", "위기 대응", "보도자료", "미디어 대응"];
+  const keywords = [...new Set([...skills, ...known.filter((term) => body.includes(term))])].slice(0, 8);
+  const achievements = body
+    .split("\n")
+    .filter((line) => line.trim().startsWith("- ") && /\d/.test(line))
+    .map((line) => line.trim().slice(2).trim())
+    .slice(0, 3);
+  const locations = ["서울", "경기", "인천", "부산"].filter((place) => body.includes(place)).slice(0, 2);
+  if (body.includes("GROUND_CHECK")) {
+    // 원문에 없는 값을 일부러 섞어, 서버가 걸러내는지 검증합니다.
+    return {
+      role: "우주비행사",
+      years: 42,
+      keywords: ["텐서플로", "양자컴퓨팅"],
+      summary: "매출 999억을 만든 사람입니다.",
+      achievements: ["없는 회사에서 999억을 달성했습니다."],
+      locations: ["화성"],
+      salary: 9999,
+    };
+  }
+  return {
+    role,
+    years,
+    keywords,
+    summary: "브랜드 캠페인과 SNS 채널을 운영해 온 커뮤니케이터입니다.",
+    achievements,
+    locations,
+    salary: 0,
+  };
+}
+
 /** 추천 스텁: 이력서에 있는 말만 씁니다. */
 function recommendPayload() {
   return {
@@ -270,6 +312,7 @@ async function geminiResponse(url, init = {}) {
 }
 
 function payloadFor(system, user) {
+  if (system.includes("JOBFIT_PROFILE")) return resumeProfilePayload(user);
   if (system.includes("JOBFIT_JOBURL")) return jobExtractPayload(user);
   if (system.includes("JOBFIT_RECOMMEND")) return recommendPayload();
   if (system.includes("JOBFIT_EVAL")) return evalPayload(user);

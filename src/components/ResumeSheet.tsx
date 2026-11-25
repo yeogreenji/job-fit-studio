@@ -73,7 +73,7 @@ export function ResumeSheet({
       <div className="relative z-10 flex max-h-[92vh] w-full max-w-[720px] flex-col overflow-hidden rounded-t-2xl border border-line bg-surface shadow-2xl sm:rounded-2xl">
         <div className="flex items-start justify-between gap-3 border-b border-line px-4 py-3">
           <div>
-            <div className="eyebrow">My resume</div>
+            <div className="eyebrow">내 이력서</div>
             <h2 className="mt-1 text-[15px] font-semibold text-ink">내 이력서 · 경력 원본</h2>
             <p className="mt-0.5 text-[10.5px] leading-relaxed text-muted">
               여기 적은 문장만 AI가 씁니다. 회사·직함·기간·성과 수치를 그대로 적어 주세요.
@@ -97,7 +97,7 @@ export function ResumeSheet({
           <input
             ref={fileRef}
             type="file"
-            accept=".txt,.md,.markdown,.pdf,text/plain,application/pdf"
+            accept=".txt,.md,.markdown,.pdf,.docx,text/plain,application/pdf"
             className="hidden"
             data-testid="sheet-file-input"
             onChange={(event) => {

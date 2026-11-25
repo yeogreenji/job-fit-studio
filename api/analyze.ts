@@ -31,8 +31,8 @@ interface ApiResponse {
 }
 
 const SERVICE = "jobfit-analyze";
-const VERSION = "1.4.0";
-const MODES = ["package", "interview_eval", "job_url", "recommend", "apply_kit"] as const;
+const VERSION = "1.5.0";
+const MODES = ["package", "interview_eval", "job_url", "recommend", "apply_kit", "resume_profile"] as const;
 type Mode = (typeof MODES)[number];
 const DEFAULT_MODEL = "gpt-4o-mini";
 const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
@@ -296,6 +296,20 @@ const JOB_EXTRACT_SYSTEM = `[JOBFIT_JOBURL] 당신은 채용 공고 페이지의
   "note": "공고에서 확인하지 못한 항목이 있으면 한 문장"
 }`;
 
+const PROFILE_SYSTEM = `[JOBFIT_PROFILE] 당신은 한국 채용 시장의 이력서를 읽고, 지원자가 지금 찾을 자리의 조건을 정리하는 도구입니다.
+규칙:
+1. 주어진 이력서 본문에 실제로 적힌 내용만 옮깁니다. 없는 경력·회사·기술·수치를 만들지 않습니다.
+2. role은 이력서의 한 줄 소개나 가장 최근 직함에서 고릅니다(2~30자). 회사 이름이나 채용 사이트 이름을 쓰지 않습니다.
+3. years는 본문에 적힌 경력 연차(예: ‘경력 6년’, ‘6년차’)입니다. 명시된 값이 없으면 0으로 둡니다. 경력 기간을 더해 새로 계산하지 않습니다.
+4. keywords는 본문에 나온 직무 용어·기술·업무 이름 중 5~8개입니다. 본문에 없는 말은 넣지 않습니다. ‘매니저·대리·과장·차장’ 같은 직급만 있는 말은 넣지 않습니다.
+5. summary는 이력서의 소개 문장을 160자 이내로 줄인 한 줄 요약입니다. 소개가 없으면 가장 최근 경력과 연차로 씁니다.
+6. achievements는 본문의 성과 문장 2~3개를 **한 글자도 바꾸지 않고** 그대로 옮깁니다.
+7. locations는 본문에 근무지로 적힌 지역만 넣습니다(예: 서울). 언급이 없으면 빈 배열입니다.
+8. salary는 본문에 희망 연봉이 만원 단위 숫자로 적혀 있을 때만 그 값을 쓰고, 없으면 0입니다.
+9. 반드시 아래 JSON 객체 하나만 출력합니다. 설명 문장이나 코드블록 표시를 붙이지 않습니다.
+
+{"role": "", "years": 0, "keywords": [""], "summary": "", "achievements": [""], "locations": [""], "salary": 0}`;
+
 const RECOMMEND_SYSTEM = `[JOBFIT_RECOMMEND] 당신은 한국 경력직 이직을 돕는 커리어 코치입니다.
 지원자의 이력서만 보고 (공고 없이) 다음을 제안합니다.
 규칙:
@@ -354,6 +368,46 @@ function numbersIn(text: string): Set<string> {
 function buildJobExtractPrompt(page: Pick<FetchedPage, "title" | "finalUrl" | "text">): string {
   const body = page.text.replace(/\n{2,}/g, "\n").slice(0, 6_000);
   return `[페이지 제목] ${page.title}\n[주소] ${page.finalUrl}\n[본문]\n${body}\n\n위 페이지에서 회사·직무·담당 업무·자격 요건·우대 사항·조직 문화를 뽑아 JSON으로 정리하세요. 본문에 없는 값은 빈 문자열로 두세요.`;
+}
+
+function buildResumeProfilePrompt(text: string): string {
+  const body = text.replace(/\n{2,}/g, "\n").slice(0, 16_000);
+  return `[이력서 본문]\n${body}\n\n위 이력서에서 대표 직무·경력 연차·핵심 키워드·한 줄 요약·대표 성과 문장·근무지·희망 연봉을 뽑아 JSON으로 정리하세요. 본문에 없는 값은 비우거나 0으로 두세요.`;
+}
+
+/** AI가 뽑은 프로필을 이력서 원문과 대조해, 원문에 없는 값은 버립니다. */
+function groundProfile(data: Record<string, unknown>, text: string): Record<string, unknown> {
+  const compact = (value: string) => value.replace(/\s+/g, "").toLowerCase();
+  const haystack = compact(text);
+  const allowed = numbersIn(text);
+  const LOCATIONS = ["서울", "경기", "인천", "부산", "대구", "대전", "광주", "울산", "세종", "제주", "재택"];
+
+  const roleCandidate = str(data.role, 40).replace(/^[-–—•·*]\s*/, "");
+  const PORTAL = /^(?:사람인|잡코리아|원티드|리멤버|링크드인|점핏|로켓펀치|인크루트)$/;
+  const roleTokens = roleCandidate.split(/\s+/).map((token) => compact(token).replace(/[()\[\],·/]/g, "")).filter((token) => token.length >= 2);
+  const roleGrounded = roleTokens.some((token) => haystack.includes(token));
+  const role = PORTAL.test(roleCandidate) || roleCandidate.length < 2 || !roleGrounded ? "" : roleCandidate;
+
+  const yearsRaw = typeof data.years === "number" && Number.isFinite(data.years) ? Math.round(data.years) : 0;
+  const years = yearsRaw > 0 && yearsRaw <= 50 && text.includes(String(yearsRaw)) ? yearsRaw : 0;
+
+  const keywords = strList(data.keywords, 12, 24).filter((term) => {
+    const key = compact(term).replace(/[()\[\],·/]/g, "");
+    return key.length >= 2 && key.length <= 20 && haystack.includes(key) && !/^(매니저|대리|과장|차장|부장|팀장|사원|인턴|신입|경력)$/.test(term);
+  });
+
+  const summaryRaw = str(data.summary, 200);
+  const summaryNumbers = [...numbersIn(summaryRaw)].filter((token) => !allowed.has(token));
+  const summary = summaryNumbers.length ? "" : summaryRaw;
+
+  const achievements = strList(data.achievements, 4, 200).filter((line) => compact(line).length >= 10 && haystack.includes(compact(line)));
+
+  const locations = strList(data.locations, 6, 20).filter((place) => LOCATIONS.includes(place) && text.includes(place));
+
+  const salaryRaw = typeof data.salary === "number" && Number.isFinite(data.salary) ? Math.round(data.salary) : 0;
+  const salary = salaryRaw > 0 && salaryRaw <= 100_000 && text.includes(String(salaryRaw)) ? salaryRaw : null;
+
+  return { role, years, keywords, summary, achievements, locations, salary };
 }
 
 function buildRecommendPrompt(resume: NormalizedResume, priority: string): string {
@@ -597,7 +651,7 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
 
   const mode = str(body.mode, 30) as Mode;
   if (!MODES.includes(mode)) {
-    fail(res, 400, "bad_mode", "mode는 package, interview_eval, job_url, recommend 중 하나이어야 합니다.");
+    fail(res, 400, "bad_mode", "mode는 package, interview_eval, job_url, recommend, apply_kit, resume_profile 중 하나이어야 합니다.");
     return;
   }
 
@@ -768,6 +822,29 @@ export default async function handler(req: ApiRequest, res: ApiResponse): Promis
         return;
       }
       send(res, 200, { ok: true, mode, provider, model: completion.model, data });
+      return;
+    }
+
+    if (mode === "resume_profile") {
+      const text = str(body.text, 20_000);
+      if (text.length < 60) {
+        fail(res, 400, "bad_resume_text", "이력서 글자가 너무 적습니다.");
+        return;
+      }
+      const completion = await callCompletion({
+        provider,
+        apiKey,
+        model: useModel,
+        system: PROFILE_SYSTEM,
+        user: buildResumeProfilePrompt(text),
+        maxTokens: 1_000,
+      });
+      const data = parseJsonContent(completion.content);
+      if (!data) {
+        fail(res, 502, "bad_json", "AI 응답을 JSON으로 읽지 못했습니다.");
+        return;
+      }
+      send(res, 200, { ok: true, mode, provider, model: completion.model, data: groundProfile(data, text) });
       return;
     }
 

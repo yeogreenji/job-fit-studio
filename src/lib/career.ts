@@ -172,6 +172,66 @@ export function mergeProfileFromResume(current: CareerProfile | null, resume: Ma
   return { profile: next, filled };
 }
 
+/**
+ * AI가 뽑은 프로필 초안을 합칩니다.
+ *
+ * 사용자가 직접 넣은 값은 그대로 두고 빈 항목만 채웁니다. 키워드만은 지우지 않고 더합니다
+ * (이력서 원문에 실제로 있는 말만 서버가 걸러 보내므로, 많은 쪽이 검색에 유리합니다).
+ */
+export interface ProfileDraft {
+  role?: string;
+  years?: number | null;
+  keywords?: string[];
+  summary?: string;
+  locations?: string[];
+  salary?: number | null;
+}
+
+export function mergeProfileFromDraft(current: CareerProfile | null, draft: ProfileDraft): MergeResult {
+  const base: CareerProfile = current ? { ...current } : { ...EMPTY_PROFILE };
+  const next: CareerProfile = { ...base };
+  const filled: string[] = [];
+
+  const role = clean(draft.role ?? "").slice(0, 40);
+  if (!base.role.trim() && role) {
+    next.role = role;
+    filled.push("대표 직무");
+  }
+  const summary = clean(draft.summary ?? "").slice(0, 160);
+  if (!(base.summary ?? "").trim() && summary.length >= 8) {
+    next.summary = summary;
+    filled.push("경력 요약");
+  }
+  if (base.years === null && typeof draft.years === "number" && draft.years > 0) {
+    next.years = Math.min(50, Math.round(draft.years));
+    filled.push(`경력 ${next.years}년`);
+  }
+  const extraKeywords = (draft.keywords ?? [])
+    .map((term) => clean(term))
+    .filter((term) => term.length >= 2 && term.length <= 16 && !base.keywords.some((kept) => kept === term));
+  if (extraKeywords.length) {
+    next.keywords = [...base.keywords, ...extraKeywords].slice(0, 12);
+    filled.push(`키워드 ${next.keywords.length - base.keywords.length}개 보강`);
+  }
+  if (!base.locations.length) {
+    const places = (draft.locations ?? []).filter((place) => LOCATION_OPTIONS.includes(place));
+    if (places.length) {
+      next.locations = [...new Set(places)].slice(0, 3);
+      filled.push(`선호 지역 ${next.locations.join("·")}`);
+    }
+  }
+  if (base.salary === null && typeof draft.salary === "number" && draft.salary > 0) {
+    next.salary = Math.round(draft.salary);
+    filled.push(`희망 연봉 ${next.salary.toLocaleString("ko-KR")}만원`);
+  }
+
+  if (filled.length) {
+    next.origin = "resume";
+    next.updatedAt = new Date().toISOString();
+  }
+  return { profile: next, filled };
+}
+
 /** 화면에 보여 줄 만한 프로필인지 (적합도 계산에 쓸 값이 하나라도 있는지) */
 export function profileIsSet(profile: CareerProfile | null | undefined): profile is CareerProfile {
   if (!profile) return false;

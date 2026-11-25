@@ -3,17 +3,25 @@ import {
   ArrowUpRight,
   BadgeCheck,
   Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   FileText,
   FolderOpen,
+  Loader2,
   Mail,
+  MessageSquareQuote,
+  Mic,
   Send,
   ShieldCheck,
+  Sparkles,
   X,
 } from "lucide-react";
-import type { ApplyDraft, ApplyRecord, CareerKit, DocMatch, HubJob, MasterResume } from "../types";
+import type { ApplyDraft, ApplyPrep, ApplyRecord, CareerKit, DocMatch, HubJob, MasterResume } from "../types";
 import { DOC_LABEL } from "../lib/careerKit";
 import { buildApplyPacket } from "../lib/applyPacket";
+import { speakingSeconds } from "../lib/coach";
 import { docItems } from "../lib/apply";
 import { ddayOf } from "../lib/collect";
 import { CopyButton, cx } from "./ui";
@@ -44,6 +52,12 @@ export function ApplyDrawer({
   resume,
   draft,
   docMatch,
+  prep,
+  prepBusy,
+  onPrepare,
+  queue,
+  onStep,
+  onPrev,
   onClose,
   onUpdate,
   onRecord,
@@ -54,6 +68,14 @@ export function ApplyDrawer({
   resume: MasterResume;
   draft: ApplyDraft | null;
   docMatch: DocMatch | null;
+  /** 지원 동기·1분 자기소개·예상 질문을 미리 만들어 둔 묶음 */
+  prep: ApplyPrep | null;
+  prepBusy: boolean;
+  onPrepare: () => void;
+  /** 적합 상위 공고를 차례로 준비할 때의 위치 */
+  queue: { index: number; total: number } | null;
+  onStep: () => void;
+  onPrev: () => void;
   onClose: () => void;
   onUpdate: (job: HubJob) => void;
   onRecord: (job: HubJob, via: ApplyRecord["via"], documents: string[], oneLiner: string) => void;
@@ -61,7 +83,15 @@ export function ApplyDrawer({
 }) {
   const [via, setVia] = useState<ApplyRecord["via"]>("site");
   const [siteOpened, setSiteOpened] = useState(false);
+  const [openQuestion, setOpenQuestion] = useState<number | null>(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+
+  /** 드로어를 열면 그 공고의 1분 자기소개·예상 질문을 바로 준비합니다. */
+  useEffect(() => {
+    if (!job) return;
+    onPrepare();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job?.id]);
 
   /** 기록하면 확인 패널이 가장 위에 오도록 본문을 올립니다. */
   useEffect(() => {
@@ -127,8 +157,15 @@ export function ApplyDrawer({
         {/* 머리 */}
         <div className="flex items-start gap-2 border-b border-line px-4 py-3">
           <div className="min-w-0 flex-1">
-            <div className="eyebrow">Apply</div>
-            <h2 className="mt-0.5 text-[15px] font-semibold tracking-[-0.02em] text-ink">지원 준비 및 접수</h2>
+            <div className="flex items-center gap-1.5">
+              <span className="chip bg-ink px-1.5 py-0 text-[9px] font-semibold text-white">원클릭 지원 준비</span>
+              {queue && (
+                <span className="num text-[9.5px] text-muted" data-testid="apply-queue-pos">
+                  {queue.index + 1} / {queue.total}건
+                </span>
+              )}
+            </div>
+            <h2 className="mt-1 text-[15px] font-semibold tracking-[-0.02em] text-ink">지원 준비 및 접수</h2>
             <p className="mt-1 truncate text-[11px] text-muted" data-testid="apply-drawer-job">
               <span className="font-semibold text-ink" data-testid="apply-drawer-company">
                 {job.job.company || "회사 미확인"}
@@ -140,7 +177,32 @@ export function ApplyDrawer({
                 {dday.label}
               </span>
             </p>
+            <p className="mt-1 text-[9px] leading-relaxed text-faint">로그인과 최종 제출은 채용 사이트에서 직접 — 계정 보호와 최종 확인 때문입니다.</p>
           </div>
+          {queue && (
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={onPrev}
+                disabled={queue.index === 0}
+                className="btn btn-ghost h-7 w-7 px-0 text-muted disabled:opacity-30"
+                aria-label="이전 공고"
+                data-testid="apply-prev"
+              >
+                <ChevronLeft size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={onStep}
+                disabled={queue.index >= queue.total - 1}
+                className="btn btn-ghost h-7 w-7 px-0 text-muted disabled:opacity-30"
+                aria-label="다음 공고"
+                data-testid="apply-next"
+              >
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          )}
           <button type="button" onClick={onClose} className="rounded-md p-1 text-muted hover:bg-paper-deep" aria-label="닫기" data-testid="apply-close">
             <X size={16} />
           </button>
@@ -177,6 +239,25 @@ export function ApplyDrawer({
               </p>
             </div>
           )}
+          {applied && queue && (
+            <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-surface px-3 py-2" data-testid="apply-queue-next-panel">
+              {queue.index < queue.total - 1 ? (
+                <>
+                  <span className="text-[10px] text-ink-2">
+                    다음은 {queue.index + 2}번째 공고입니다. 준비 문구가 이미 만들어져 있습니다.
+                  </span>
+                  <button type="button" onClick={onStep} className="btn btn-primary ml-auto h-7 px-2.5 text-[10.5px]" data-testid="apply-queue-next">
+                    다음 공고 이어서 <ChevronRight size={11} />
+                  </button>
+                </>
+              ) : (
+                <span className="text-[10px] text-ink-2">
+                  적합 상위 {queue.total}건 지원 준비를 모두 마쳤습니다. 지원 현황에서 상태를 관리하세요.
+                </span>
+              )}
+            </div>
+          )}
+
           {/* 적합도·대조 */}
           <div className="rounded-lg border border-line bg-[#fcfcfa] px-3 py-2" data-testid="apply-match">
             <div className="flex flex-wrap items-center gap-1.5">
@@ -285,16 +366,119 @@ export function ApplyDrawer({
             </p>
           </div>
 
-          {/* 자소서 핵심 문단 */}
+          {/* 자소서 핵심 문단 = 지원 동기 */}
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="text-[10.5px] font-semibold text-ink-2">자소서 핵심 문단</span>
+              <span className="text-[10.5px] font-semibold text-ink-2">지원 동기 · 자소서 문단</span>
               <span className="text-[9px] text-faint">서류에 적힌 문장만으로 만듭니다</span>
               <CopyButton text={packet.coverParagraph} label="복사" className="ml-auto h-6 px-1.5 text-[10px]" />
             </div>
             <p className="mt-1 whitespace-pre-line rounded-lg border border-line bg-[#fcfcfa] px-3 py-2.5 text-[11.5px] leading-[1.8] text-ink-2" data-testid="apply-paragraph">
               {packet.coverParagraph}
             </p>
+          </div>
+
+          {/* 1분 자기소개 · 면접 예상 질문 — 열면 바로 준비됩니다 */}
+          <div className="rounded-xl border border-line" data-testid="apply-prep">
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-2">
+              <Sparkles size={12} className="text-accent" />
+              <span className="text-[10.5px] font-semibold text-ink-2">면접까지 자동 준비</span>
+              {prepBusy && (
+                <span className="chip bg-paper-deep text-[9px] text-muted" data-testid="apply-prep-busy">
+                  <Loader2 size={9} className="animate-spin" /> 만드는 중
+                </span>
+              )}
+              {prep && (
+                <span
+                  className={cx("chip text-[9px]", prep.source === "ai" ? "bg-accent-soft text-accent-deep" : "bg-paper-deep text-muted")}
+                  data-testid="apply-prep-source"
+                >
+                  {prep.source === "ai" ? `AI 준비${prep.model ? ` · ${prep.model}` : ""}` : "규칙 준비"}
+                </span>
+              )}
+              {prep && prep.questions.length > 0 && (
+                <CopyButton
+                  text={[`[1분 자기소개]`, prep.intro, "", `[면접 예상 질문]`, ...prep.questions.map((q, i) => `Q${i + 1}. ${q.question}\n${q.answer}`)].join("\n")}
+                  label="전체 복사"
+                  className="ml-auto h-6 px-1.5 text-[10px]"
+                />
+              )}
+            </div>
+
+            {/* 1분 자기소개 */}
+            <div className="border-b border-line px-3 py-2.5">
+              <div className="flex items-center gap-1.5">
+                <Mic size={11} className="text-muted" />
+                <span className="text-[10.5px] font-semibold text-ink-2">1분 자기소개</span>
+                {prep?.intro && (
+                  <span className="num text-[9px] text-faint">
+                    {prep.intro.replace(/\s/g, "").length}자 · 약 {speakingSeconds(prep.intro)}초
+                  </span>
+                )}
+                {prep?.intro && <CopyButton text={prep.intro} label="복사" className="ml-auto h-6 px-1.5 text-[10px]" />}
+              </div>
+              {prep?.intro ? (
+                <p className="mt-1.5 whitespace-pre-line rounded-lg border border-line bg-[#fcfcfa] px-3 py-2.5 text-[11.5px] leading-[1.85] text-ink-2" data-testid="apply-intro">
+                  {prep.intro}
+                </p>
+              ) : prepBusy ? (
+                <div className="mt-1.5 space-y-1.5">
+                  <div className="skeleton-sweep h-3 w-full rounded bg-paper-deep" />
+                  <div className="skeleton-sweep h-3 w-4/5 rounded bg-paper-deep" />
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[10px] leading-relaxed text-muted">이력서를 올리면 지원 동기와 함께 1분 자기소개를 만들어 둡니다.</p>
+              )}
+            </div>
+
+            {/* 예상 질문 */}
+            <div className="px-3 py-2.5">
+              <div className="flex items-center gap-1.5">
+                <MessageSquareQuote size={11} className="text-muted" />
+                <span className="text-[10.5px] font-semibold text-ink-2">면접 예상 질문</span>
+                {prep && <span className="num text-[9px] text-faint">{prep.questions.length}개 · 답변 스크립트</span>}
+              </div>
+              {prep && prep.questions.length > 0 ? (
+                <ul className="mt-1.5 space-y-1" data-testid="apply-questions">
+                  {prep.questions.map((question, index) => {
+                    const open = openQuestion === index;
+                    return (
+                      <li key={`${question.question}-${index}`} className="rounded-lg border border-line bg-surface" data-testid="apply-question">
+                        <button
+                          type="button"
+                          onClick={() => setOpenQuestion(open ? null : index)}
+                          aria-expanded={open}
+                          className="flex w-full items-start gap-1.5 px-2.5 py-2 text-left"
+                        >
+                          <span className="num mt-0.5 text-[9px] font-semibold text-accent-deep">Q{index + 1}</span>
+                          <span className="min-w-0 flex-1 text-[10.5px] font-semibold leading-relaxed text-ink-2">{question.question}</span>
+                          {question.category && <span className="chip bg-paper-deep px-1.5 py-0 text-[8.5px] text-muted">{question.category}</span>}
+                          <ChevronDown size={11} className={cx("mt-0.5 shrink-0 text-faint transition-transform", open && "rotate-180")} />
+                        </button>
+                        {open && (
+                          <div className="space-y-1.5 border-t border-line px-2.5 py-2">
+                            {question.why && <p className="text-[9px] leading-relaxed text-faint">면접관의 의도 · {question.why}</p>}
+                            <p className="whitespace-pre-line text-[10.5px] leading-[1.8] text-ink-2" data-testid="apply-question-answer">
+                              {question.answer}
+                            </p>
+                            {question.avoid && <p className="text-[9px] leading-relaxed text-warn">피해야 할 답변 · {question.avoid}</p>}
+                            <CopyButton
+                              text={`${question.question}\n\n${question.answer}`}
+                              label="질문·답변 복사"
+                              className="h-6 px-1.5 text-[9.5px]"
+                            />
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="mt-1.5 text-[10px] leading-relaxed text-muted">
+                  {prepBusy ? "이 공고와 내 경력을 대조해 질문을 만드는 중입니다." : "이력서를 올리면 공고 요건과 내 경력을 대조한 예상 질문을 만듭니다."}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* 이메일 지원 */}

@@ -38,7 +38,7 @@ export function AiSettingsModal({
       <div className="animate-rise relative z-10 w-full max-w-[500px] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
         <div className="flex items-start justify-between border-b border-line px-5 py-4">
           <div>
-            <div className="eyebrow">AI engine</div>
+            <div className="eyebrow">AI 연결</div>
             <h2 className="mt-1 text-[15px] font-semibold">AI 분석 연결</h2>
             <p className="mt-1 text-[10.5px] leading-relaxed text-muted">
               서버리스 함수(/api/analyze)가 OpenAI로 분석합니다. 키가 없으면 규칙 엔진으로 자동 전환됩니다.

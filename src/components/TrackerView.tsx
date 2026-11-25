@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import {
   ArrowUpRight,
+  Download,
   Briefcase,
   CalendarClock,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
   ExternalLink,
+  Lock,
   GripVertical,
   Search,
   Target,
@@ -73,6 +75,8 @@ export function TrackerView({
   onOpenStudio,
   pipelineLimit,
   onOpenPricing,
+  canExport,
+  onExport,
 }: {
   jobs: HubJob[];
   fits: Record<string, FitResult>;
@@ -81,6 +85,9 @@ export function TrackerView({
   onOpenStudio: () => void;
   pipelineLimit?: number;
   onOpenPricing?: () => void;
+  /** 프리미엄 — 지원 현황 CSV 내보내기 */
+  canExport?: boolean;
+  onExport?: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [soonOnly, setSoonOnly] = useState(false);
@@ -248,6 +255,27 @@ export function TrackerView({
               <X size={10} /> 초기화
             </button>
           )}
+          {canExport ? (
+            <button
+              type="button"
+              onClick={onExport}
+              className="btn btn-outline h-7 px-2 text-[10px]"
+              data-testid="pipeline-export"
+              title="회사·직무·상태·마감·메모를 CSV로 내려받습니다"
+            >
+              <Download size={10} /> CSV 내보내기
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenPricing}
+              className="btn btn-ghost h-7 px-2 text-[10px] text-muted"
+              data-testid="pipeline-export-locked"
+              title="프리미엄 커리어 패스에서 열립니다"
+            >
+              <Lock size={10} /> CSV · 프리미엄
+            </button>
+          )}
           <span className="num ml-auto text-[9.5px] text-faint" data-testid="pipeline-count">
             {filtered.length}/{jobs.length}
           </span>
@@ -260,7 +288,7 @@ export function TrackerView({
                 className="rounded bg-ink px-1.5 py-0.5 text-[8.5px] font-semibold text-white"
                 data-testid="pipeline-upgrade"
               >
-                {jobs.length >= pipelineLimit ? "무제한으로" : "Pro"}
+                {jobs.length >= pipelineLimit ? "무제한으로" : "업그레이드"}
               </button>
             </span>
           )}

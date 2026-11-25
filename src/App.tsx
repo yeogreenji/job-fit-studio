@@ -3,6 +3,7 @@ import { Upload, X } from "lucide-react";
 import type {
   AiConfig,
   AiStatus,
+  ApplyPrep,
   ApplyRecord,
   CareerDocKind,
   CareerKit,
@@ -19,15 +20,16 @@ import type {
 } from "./types";
 import { EMPTY_RESUME, SAMPLE_RESUMES } from "./lib/presets";
 import { enrichWithAi } from "./lib/enrich";
-import { AiError, probeAiServer, requestAiApplyKit } from "./lib/ai";
+import { AiError, probeAiServer, requestAiApplyKit, requestAiPackage, requestAiResumeProfile } from "./lib/ai";
 import { buildLocalAnswerSet } from "./lib/priority";
-import { buildMarkdown, downloadText, slugForFile } from "./lib/report";
+import { buildMarkdown, buildPipelineCsv, downloadCsv, downloadText, slugForFile } from "./lib/report";
 import { guessKind, buildPreview, readFileText } from "./lib/import";
 import { extractPdfText } from "./lib/pdf";
+import { extractDocxText } from "./lib/docx";
 import { applySources, buildLocalApplyKit, mergeAiApplyKit } from "./lib/apply";
 import { DOC_LABEL, composeKit, detectDocKind, kitReady, matchJobWithKit, parseDoc, putDoc, removeDocFromKit, searchKeywords } from "./lib/careerKit";
-import { mergeProfileFromResume, profileFromResume, profileIsSet, roleFromResume } from "./lib/career";
-import { activatePass, activateTrial, deactivatePlan, featuresOf, loadPlan, persistPlan } from "./lib/plan";
+import { mergeProfileFromDraft, mergeProfileFromResume, profileFromResume, profileIsSet, priorityLabel, roleFromResume } from "./lib/career";
+import { activatePlan, activateTrial, deactivatePlan, featuresOf, loadPlan, persistPlan, planById } from "./lib/plan";
 import { scoreFit } from "./lib/fit";
 import { buildLocalPackage } from "./lib/package";
 import { fetchMany, hubJobFromOutcome, hubJobFromPaste, splitJobUrls, urlKey, type AddProgress } from "./lib/hub";
@@ -90,7 +92,12 @@ export default function App() {
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumeBusy, setResumeBusy] = useState<string | null>(null);
   const [collectingDocs, setCollectingDocs] = useState(false);
+  const [resumeFlow, setResumeFlow] = useState<{ stage: string; matched: number | null } | null>(null);
   const [applyJob, setApplyJob] = useState<HubJob | null>(null);
+  const [applyQueue, setApplyQueue] = useState<string[]>([]);
+  const [applyIndex, setApplyIndex] = useState(0);
+  const [prepCache, setPrepCache] = useState<Record<string, ApplyPrep>>({});
+  const [prepBusyId, setPrepBusyId] = useState<string | null>(null);
 
   const [hubJobs, setHubJobs] = useState<HubJob[]>(() => loadHubJobs());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -150,6 +157,10 @@ export default function App() {
   collectionRef.current = collection;
   const careerKitRef = useRef(careerKit);
   careerKitRef.current = careerKit;
+  const profileRef = useRef<CareerProfile | null>(savedProfile);
+  profileRef.current = savedProfile;
+  const prepRef = useRef(prepCache);
+  prepRef.current = prepCache;
   const collectedOnce = useRef(false);
 
   const notify = useCallback((message: string, tone: ToastTone = "ok") => {
@@ -272,12 +283,7 @@ export default function App() {
     [notify],
   );
 
-  /** 첫 화면부터 실제 공고가 보이도록 한 번 자동으로 모읍니다. */
-  useEffect(() => {
-    if (collectedOnce.current) return;
-    collectedOnce.current = true;
-    void runCollect({ preset: collectionRef.current.preset || DEFAULT_PRESET });
-  }, [runCollect]);
+  /* 첫 화면 자동 수집은 ‘내 서류로 수집’ 함수 정의 뒤에서 겁니다 — 이력서가 있으면 그 기준으로 모읍니다. */
 
   const pickPreset = useCallback(
     (id: string) => {
@@ -310,54 +316,84 @@ export default function App() {
     return map;
   }, [hubJobs, careerKit]);
 
-  /** 내 서류로 공고 수집 — 서류에서 뽑은 키워드를 서버에 넘겨 네 곳에서 모읍니다. */
-  const collectFromDocs = useCallback(async () => {
-    const current = careerKitRef.current;
-    if (!kitReady(current)) {
-      notify("이력서나 자기소개서를 먼저 올려 주세요. 서류에서 확인된 키워드로 공고를 모읍니다.", "warn");
-      return;
-    }
-    const keywords = searchKeywords(current, 4);
-    if (!keywords.length) {
-      notify("서류에서 검색 키워드를 찾지 못했습니다. 이력서에 직무 용어를 한 줄 더 적어 보세요.", "warn");
-      return;
-    }
-    setCollection((prev) => ({
-      ...prev,
-      preset: "docs",
-      applied: keywords.join(" · "),
-      docKeywords: keywords,
-      mode: "docs",
-      status: "loading",
-      error: "",
-    }));
-    setCollectingDocs(true);
-    try {
-      const data = await requestJobs({ query: keywords[0] ?? "", keywords, limit: 60, detail: 8 });
-      setHubJobs((prev) => mergeCollected(prev, data.jobs, data.fetchedAt));
+  /**
+   * 내 서류(이력서) 키워드로 네 곳의 공고를 모읍니다.
+   * 이력서를 올리면 자동으로도 부르고, 버튼으로도 다시 부를 수 있습니다.
+   * 돌려주는 matched는 서류 키워드가 실제로 걸린 공고 수입니다.
+   */
+  const collectDocs = useCallback(
+    async (kitArg?: CareerKit, reason: "manual" | "resume" = "manual"): Promise<{ matched: number; total: number } | null> => {
+      const current = kitArg ?? careerKitRef.current;
+      if (!kitReady(current)) {
+        notify("이력서나 자기소개서를 먼저 올려 주세요. 서류에서 확인된 키워드로 공고를 모읍니다.", "warn");
+        return null;
+      }
+      const keywords = searchKeywords(current, 5);
+      if (!keywords.length) {
+        notify("서류에서 검색 키워드를 찾지 못했습니다. 이력서에 직무 용어를 한 줄 더 적어 보세요.", "warn");
+        return null;
+      }
       setCollection((prev) => ({
         ...prev,
-        status: data.jobs.length ? "ready" : "empty",
-        sources: data.sources,
-        at: data.fetchedAt,
-        cached: Boolean(data.cached),
-        filter: data.filter ?? null,
+        preset: "docs",
+        applied: keywords.join(" · "),
+        docKeywords: keywords,
+        mode: "docs",
+        status: "loading",
         error: "",
-        sort: "doc",
       }));
-      if (!data.jobs.length) {
-        notify(`내 서류 키워드(${keywords.join(" · ")})로는 맞는 공고를 찾지 못했습니다. 자소서·포트폴리오를 더 올리거나 키워드를 직접 넣어 보세요.`, "warn");
-      } else {
-        notify(`서류 키워드 ${keywords.length}개로 ${data.jobs.length}건을 모았습니다. ‘서류 적합’ 순서로 정렬했습니다.`);
+      setCollectingDocs(true);
+      try {
+        const data = await requestJobs({ query: keywords[0] ?? "", keywords, limit: 60, detail: 8 });
+        // 이력서를 올려 모을 때는 지금 보고 있던 공고를 지우지 않고 더합니다 (보던 카드가 사라지지 않게).
+        setHubJobs((prev) => mergeCollected(prev, data.jobs, data.fetchedAt, true));
+        setCollection((prev) => ({
+          ...prev,
+          status: data.jobs.length ? "ready" : "empty",
+          sources: data.sources,
+          at: data.fetchedAt,
+          cached: Boolean(data.cached),
+          filter: data.filter ?? null,
+          error: "",
+          sort: "doc",
+        }));
+        const matched = data.jobs.filter((job) => (job.hitKeywords?.length ?? 0) > 0).length;
+        if (!data.jobs.length) {
+          notify(`내 이력서 키워드(${keywords.join(" · ")})로는 맞는 공고를 찾지 못했습니다. 자소서·포트폴리오를 더 올리거나 키워드를 직접 넣어 보세요.`, "warn");
+        } else if (reason === "resume") {
+          notify(`내 이력서 기준 맞춤 공고 ${matched}건을 찾았습니다 — 네 곳에서 ${data.jobs.length}건을 모아 대조했습니다.`);
+        } else {
+          notify(`서류 키워드 ${keywords.length}개로 ${data.jobs.length}건을 모았습니다 — 서류 키워드가 걸린 ${matched}건을 위로 올렸습니다.`);
+        }
+        return { matched, total: data.jobs.length };
+      } catch (error) {
+        const message = error instanceof CollectError || error instanceof Error ? error.message : "공고를 모으지 못했습니다.";
+        setCollection((prev) => ({ ...prev, status: "error", error: message, sources: [] }));
+        notify(message, "warn");
+        return null;
+      } finally {
+        setCollectingDocs(false);
       }
-    } catch (error) {
-      const message = error instanceof CollectError || error instanceof Error ? error.message : "공고를 모으지 못했습니다.";
-      setCollection((prev) => ({ ...prev, status: "error", error: message, sources: [] }));
-      notify(message, "warn");
-    } finally {
-      setCollectingDocs(false);
+    },
+    [notify],
+  );
+
+  const collectFromDocs = useCallback(() => void collectDocs(), [collectDocs]);
+
+  /**
+   * 첫 화면부터 실제 공고가 보이도록 한 번 모읍니다.
+   * 이력서가 이미 있으면 기본 프리셋이 아니라 ‘내 이력서 기준’으로 모읍니다.
+   */
+  useEffect(() => {
+    if (collectedOnce.current) return;
+    collectedOnce.current = true;
+    const kit = careerKitRef.current;
+    if (kitReady(kit) && searchKeywords(kit, 4).length >= 1) {
+      void collectDocs(kit);
+      return;
     }
-  }, [notify]);
+    void runCollect({ preset: collectionRef.current.preset || DEFAULT_PRESET });
+  }, [collectDocs, runCollect]);
 
   const toggleSaveJob = useCallback(
     (id: string) => {
@@ -448,6 +484,7 @@ export default function App() {
     persistResumeMeta(meta);
     // 이력서가 바뀌면 예전 이력서로 만든 지원 문구는 지우고 다시 만듭니다.
     setHubJobs((prev) => prev.map((job) => (job.draft ? { ...job, draft: undefined } : job)));
+    setPrepCache({});
   }, []);
 
   const removeDocument = useCallback(
@@ -471,10 +508,125 @@ export default function App() {
   );
 
   /** 이력서·자기소개서·포트폴리오 파일을 읽어 서류 허브에 담습니다. */
+  /**
+   * 이력서 글자 → 프로필 자동 채움 → 맞춤 공고 자동 수집.
+   * 파일(PDF·DOCX·TXT·MD)과 직접 붙여넣기가 같은 길을 씁니다.
+   */
+  const ingestResume = useCallback(
+    async (text: string, fileName: string, info: { pages?: number; note?: string } = {}) => {
+      const chars = text.replace(/\s/g, "").length;
+      const parsedKind = guessKind(text);
+      const parsed = buildPreview(text, parsedKind);
+      if (parsedKind === "job") {
+        notify("이 파일은 공고처럼 보입니다. 공고는 위 ‘공고 모으기’ 칸에 URL이나 본문으로 넣어 주세요.", "warn");
+      }
+
+      /** ① 이력서에서 확인되는 값만으로 커리어 프로필을 채웁니다 (이미 넣은 값은 그대로). */
+      const merged = mergeProfileFromResume(profileRef.current, parsed.resume);
+      let profileNow = merged.profile;
+      if (merged.filled.length) {
+        setSavedProfile(profileNow);
+        persistCareerProfile(profileNow);
+        profileRef.current = profileNow;
+      }
+
+      let doc = parseDoc({
+        kind: "resume",
+        text,
+        fileName,
+        chars,
+        pages: info.pages,
+        resume: parsed.resume,
+        uploadedAt: new Date().toISOString(),
+      });
+      let nextKit = putDoc(careerKitRef.current, doc, {
+        role: roleFromResume(parsed.resume),
+        years: parsed.resume.years > 0 ? parsed.resume.years : null,
+        resume: parsed.resume,
+      });
+      setCareerKit(nextKit);
+      careerKitRef.current = nextKit;
+
+      const bullets = resumeBulletCount(parsed.resume);
+      applyResume(parsed.resume, {
+        source: "file",
+        fileName,
+        savedAt: new Date().toISOString(),
+        note: [info.note, parsed.summary, parsed.warnings.length ? parsed.warnings[0] : ""].filter(Boolean).join(" · "),
+      });
+      setResumeOpen(false);
+      const profileNote = merged.filled.length ? ` 프로필 자동 채움 — ${merged.filled.join(" · ")}.` : "";
+      notify(
+        bullets === 0
+          ? `경력 문장을 나누지 못했습니다. 편집 창에서 회사·직함과 문장을 확인해 주세요.${profileNote}`
+          : `이력서를 저장했습니다 — 경력 ${parsed.resume.experiences.length}개 · 문장 ${bullets}개 · 서류 키워드 ${doc.keywords.length}개.${profileNote}`,
+        bullets === 0 ? "warn" : "ok",
+      );
+
+      /** ② AI가 연결돼 있으면 이력서를 읽어 직무·키워드·성과까지 더 정확히 잡습니다. */
+      setResumeFlow({ stage: "이력서에서 프로필을 읽는 중", matched: null });
+      if (aiStatus.kind === "live") {
+        setResumeBusy("AI가 이력서를 읽고 프로필을 채우는 중");
+        try {
+          const { data } = await requestAiResumeProfile({ text, fileName, config: aiConfig });
+          const mergedAi = mergeProfileFromDraft(profileNow, {
+            role: data.role,
+            years: typeof data.years === "number" ? data.years : null,
+            keywords: data.keywords,
+            summary: data.summary,
+            locations: data.locations,
+            salary: data.salary ?? null,
+          });
+          profileNow = mergedAi.profile;
+          if (mergedAi.filled.length) {
+            setSavedProfile(profileNow);
+            persistCareerProfile(profileNow);
+            profileRef.current = profileNow;
+          }
+          const aiKeywords = (data.keywords ?? []).map((term) => term.trim()).filter(Boolean);
+          const achievements = (data.achievements ?? []).map((line) => line.trim()).filter(Boolean);
+          if (aiKeywords.length || achievements.length) {
+            doc = {
+              ...doc,
+              keywords: [...new Set([...aiKeywords, ...doc.keywords])].slice(0, 8),
+              highlights: [...new Set([...achievements, ...doc.highlights])].slice(0, 3),
+              summary: doc.summary || (data.summary ?? "").slice(0, 160),
+            };
+            nextKit = putDoc(nextKit, doc, {
+              role: profileNow.role || roleFromResume(parsed.resume),
+              years: profileNow.years,
+              resume: parsed.resume,
+            });
+            setCareerKit(nextKit);
+            careerKitRef.current = nextKit;
+          }
+          if (mergedAi.filled.length) {
+            notify(`AI가 이력서를 읽어 프로필을 채웠습니다 — ${mergedAi.filled.join(" · ")}.`);
+          }
+        } catch {
+          notify("AI 읽기는 건너뛰고, 이력서에서 확인되는 값만으로 프로필을 채웠습니다.", "warn");
+        } finally {
+          setResumeBusy(null);
+        }
+      }
+
+      /** ③ 그 프로필의 키워드로 공고를 바로 모아 대조합니다. */
+      setResumeFlow({ stage: "내 이력서 기준으로 공고를 찾는 중", matched: null });
+      const found = await collectDocs(nextKit, "resume");
+      setResumeFlow(null);
+      if (found && found.matched > 0) {
+        setCollection((prev) => ({ ...prev, sort: "doc" }));
+      }
+    },
+    [aiConfig, aiStatus.kind, applyResume, collectDocs, notify],
+  );
+
   const importDoc = useCallback(
     async (file: File, hint?: CareerDocKind) => {
-      const isPdf = file.name.toLowerCase().endsWith(".pdf");
-      setResumeBusy(isPdf ? "PDF에서 글자를 읽는 중" : "서류 파일을 읽는 중");
+      const lower = file.name.toLowerCase();
+      const isPdf = lower.endsWith(".pdf");
+      const isDocx = lower.endsWith(".docx");
+      setResumeBusy(isPdf ? "PDF에서 글자를 읽는 중" : isDocx ? "Word 파일에서 글자를 읽는 중" : "서류 파일을 읽는 중");
       try {
         let text = "";
         let pages: number | undefined;
@@ -488,6 +640,14 @@ export default function App() {
           text = result.text;
           pages = result.pages;
           fileNote = `${result.pages}쪽 · ${text.replace(/\s/g, "").length.toLocaleString("ko-KR")}자`;
+        } else if (isDocx) {
+          const result = await extractDocxText(await file.arrayBuffer());
+          if (!result.ok) {
+            notify(`${result.reason ?? "DOCX를 읽지 못했습니다"} PDF나 .txt/.md로 저장해 올리거나 ‘직접 입력’을 사용하세요.`, "err");
+            return;
+          }
+          text = result.text;
+          fileNote = `Word 문서 · ${text.replace(/\s/g, "").length.toLocaleString("ko-KR")}자`;
         } else {
           text = await readFileText(file);
         }
@@ -499,56 +659,8 @@ export default function App() {
         const kind = hint ?? detectDocKind(file.name, text);
         const chars = text.replace(/\s/g, "").length;
 
-        /* ── 이력서: 경력 문장까지 나눠 프로필·적합도를 채웁니다 ── */
         if (kind === "resume") {
-          const parsedKind = guessKind(text);
-          const parsed = buildPreview(text, parsedKind);
-          if (parsedKind === "job") {
-            notify("이 파일은 공고처럼 보입니다. 공고는 위 ‘공고 모으기’ 칸에 URL이나 본문으로 넣어 주세요.", "warn");
-          }
-
-          /** 이력서에서 확인되는 값만으로 커리어 프로필을 채웁니다 (이미 넣은 값은 그대로). */
-          const merged = mergeProfileFromResume(savedProfile, parsed.resume);
-          if (merged?.filled.length) {
-            setSavedProfile(merged.profile);
-            persistCareerProfile(merged.profile);
-          }
-          const profileNote = merged?.filled.length ? ` 프로필 자동 채움 — ${merged.filled.join(" · ")}.` : "";
-          const doc = parseDoc({
-            kind: "resume",
-            text,
-            fileName: file.name,
-            chars,
-            pages,
-            resume: parsed.resume,
-            uploadedAt: new Date().toISOString(),
-          });
-          setCareerKit((prev) =>
-            putDoc(prev, doc, {
-              role: roleFromResume(parsed.resume),
-              years: parsed.resume.years > 0 ? parsed.resume.years : null,
-              resume: parsed.resume,
-            }),
-          );
-
-          const bullets = resumeBulletCount(parsed.resume);
-          if (bullets === 0) {
-            applyResume(parsed.resume, { source: "file", fileName: file.name, savedAt: new Date().toISOString(), note: fileNote || "문장을 찾지 못함" });
-            setResumeOpen(true);
-            notify(`경력 문장을 나누지 못했습니다. 편집 창에서 회사·직함과 문장을 확인해 주세요.${profileNote}`, "warn");
-            return;
-          }
-          applyResume(parsed.resume, {
-            source: "file",
-            fileName: file.name,
-            savedAt: new Date().toISOString(),
-            note: [fileNote, parsed.summary, parsed.warnings.length ? parsed.warnings[0] : ""].filter(Boolean).join(" · "),
-          });
-          setResumeOpen(false);
-          notify(
-            `이력서를 저장했습니다 — 경력 ${parsed.resume.experiences.length}개 · 문장 ${bullets}개 · 서류 키워드 ${doc.keywords.length}개.${profileNote}`,
-            parsed.warnings.length ? "warn" : "ok",
-          );
+          await ingestResume(text, file.name, { pages, note: fileNote });
           return;
         }
 
@@ -560,12 +672,31 @@ export default function App() {
           doc.keywords.length ? "ok" : "warn",
         );
       } catch {
-        notify("파일을 읽지 못했습니다. .txt/.md/.pdf인지 확인해 주세요.", "err");
+        notify("파일을 읽지 못했습니다. .txt/.md/.pdf/.docx인지 확인해 주세요.", "err");
       } finally {
         setResumeBusy(null);
       }
     },
-    [applyResume, notify, savedProfile],
+    [ingestResume, notify],
+  );
+
+  /** 이력서 본문 붙여넣기 — 파일 없이 같은 자동 흐름을 탑니다. */
+  const importResumeText = useCallback(
+    async (text: string) => {
+      if (text.trim().length < 40) {
+        notify("이력서 내용을 조금 더 붙여넣어 주세요.", "warn");
+        return;
+      }
+      setResumeBusy("붙여넣은 이력서를 읽는 중");
+      try {
+        await ingestResume(text, "붙여넣은 이력서", {
+          note: `직접 붙여넣음 · ${text.replace(/\s/g, "").length.toLocaleString("ko-KR")}자`,
+        });
+      } finally {
+        setResumeBusy(null);
+      }
+    },
+    [ingestResume, notify],
   );
 
   const useSampleResume = useCallback(() => {
@@ -579,17 +710,19 @@ export default function App() {
       resume: sample,
     });
     setCareerKit((prev) => putDoc(prev, doc, { role: roleFromResume(sample), years: sample.years > 0 ? sample.years : null, resume: sample }));
-    const merged = mergeProfileFromResume(savedProfile, sample);
+    const merged = mergeProfileFromResume(profileRef.current, sample);
     if (merged.filled.length) {
       setSavedProfile(merged.profile);
       persistCareerProfile(merged.profile);
+      profileRef.current = merged.profile;
     }
+    setPrepCache({});
     setResumeOpen(false);
     notify(
       `가상 인물 ‘서하늘’ 샘플을 넣었습니다.${merged.filled.length ? ` 프로필 자동 채움 — ${merged.filled.join(" · ")}.` : ""} 실제 지원 전에 내 이력서로 바꿔 주세요.`,
       "warn",
     );
-  }, [applyResume, notify, savedProfile]);
+  }, [applyResume, notify]);
 
   /* ── 지원 문구 (AI 다듬기) ── */
 
@@ -597,7 +730,7 @@ export default function App() {
     async (job: HubJob, manual = false) => {
       if (!features.aiRefine) {
         if (manual) {
-          notify("AI 문장 다듬기는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+          notify("AI 문장 다듬기는 유료 플랜 기능입니다. 요금제에서 14일 무료 체험을 켜면 열립니다.", "warn");
           setPricingOpen(true);
         }
         return;
@@ -721,13 +854,12 @@ export default function App() {
         persistPlan(next);
         notify("Free 플랜입니다. 담은 공고·이력서·프로필은 그대로 남습니다.", "warn");
       } else {
-        const next = id === "pass" ? activatePass() : activateTrial();
+        const next = activatePlan(id);
         setPlan(next);
         persistPlan(next);
+        const months = id === "focus" ? "1개월" : id === "pass" ? "3개월" : "6개월";
         notify(
-          id === "pass"
-            ? "3개월 이직 패스(데모)를 켰습니다 — 90일 동안 지원 패키지 4종·AI 다듬기·무제한 파이프라인이 열립니다."
-            : "Pro 무료 체험(14일)을 켰습니다 — 지원 패키지 4종·AI 다듬기·무제한 파이프라인이 열렸습니다.",
+          `${planById(id).name}(데모)를 켜쉈습니다 — ${months} 동안 지원 패키지 4종·AI 다듬기·무제한 파이프라인이 열립니다.`,
         );
       }
       setPricingOpen(false);
@@ -741,12 +873,137 @@ export default function App() {
       setPlan(next);
       persistPlan(next);
       notify(
-        on ? "Pro 무료 체험(14일)을 켰습니다 — 결제 없이 이 브라우저에서만 열립니다." : "Pro 체험을 껐습니다. Free로 돌아갑니다.",
+        on ? "14일 무료 체험을 켰습니다 — 결제 없이 이 브라우저에서만 열립니다." : "무료 체험을 껐습니다. Free로 돌아갑니다.",
         on ? "ok" : "warn",
       );
     },
     [notify],
   );
+
+  /* ── 지원 준비 (1분 자기소개·예상 질문) · 연속 지원 ── */
+
+  /**
+   * 지원 드로어가 보는 문구 묶음을 미리 만듭니다.
+   * 규칙으로 즉시 만들고, AI가 연결돼 있으면 같은 공고로 한 번 더 다듬어 교체합니다.
+   */
+  const prepareApply = useCallback(
+    async (hubJob: HubJob) => {
+      if (prepRef.current[hubJob.id]) return;
+      if (!resumeReady(resume)) return;
+      setPrepBusyId(hubJob.id);
+      try {
+        const base = buildLocalPackage({
+          resume,
+          job: hubJob.job,
+          source: hubJob.source,
+          priority: prefs.priority ?? undefined,
+          targetSalary,
+          hubJobId: hubJob.id,
+        });
+        const local: ApplyPrep = {
+          intro: base.intro?.text ?? "",
+          questions: base.questions.slice(0, 5).map((question) => ({
+            question: question.question,
+            why: question.why,
+            answer: question.answer ?? "",
+            avoid: question.avoid,
+            category: question.category,
+          })),
+          source: "rule",
+          at: new Date().toISOString(),
+        };
+        let next = local;
+        if (aiStatus.kind === "live" && features.aiRefine) {
+          try {
+            const { data, model } = await requestAiPackage({
+              job: hubJob.job,
+              resume,
+              match: base.match,
+              config: aiConfig,
+              priorityLabel: priorityLabel(prefs.priority),
+              targetSalary,
+              profile: profileBrief,
+            });
+            const questions = (data.questions ?? [])
+              .slice(0, 5)
+              .map((question) => ({
+                question: question.question ?? "",
+                why: question.why ?? "",
+                answer: question.answer ?? "",
+                avoid: question.avoid,
+                category: question.category,
+              }))
+              .filter((question) => question.question && question.answer);
+            next = {
+              intro: data.intro?.text?.trim() || local.intro,
+              questions: questions.length ? questions : local.questions,
+              source: "ai",
+              model,
+              at: new Date().toISOString(),
+            };
+          } catch {
+            /* AI가 막히면 규칙 문구를 그대로 둡니다 */
+          }
+        }
+        setPrepCache((prev) => ({ ...prev, [hubJob.id]: next }));
+      } finally {
+        setPrepBusyId((prev) => (prev === hubJob.id ? null : prev));
+      }
+    },
+    [aiConfig, aiStatus.kind, features.aiRefine, prefs.priority, profileBrief, resume, targetSalary],
+  );
+
+  const openApply = useCallback((job: HubJob) => {
+    setApplyQueue([]);
+    setApplyIndex(0);
+    setApplyJob(job);
+  }, []);
+
+  /** 적합 상위 공고들을 한 드로어에서 차례로 준비합니다. */
+  const openApplyQueue = useCallback((jobs: HubJob[]) => {
+    if (!jobs.length) return;
+    setApplyQueue(jobs.map((job) => job.id));
+    setApplyIndex(0);
+    setApplyJob(jobs[0]);
+  }, []);
+
+  const queueJobs = useMemo(
+    () => applyQueue.map((id) => hubJobs.find((job) => job.id === id)).filter((job): job is HubJob => Boolean(job)),
+    [applyQueue, hubJobs],
+  );
+
+  const stepQueue = useCallback(
+    (index: number) => {
+      const job = queueJobs[index];
+      if (!job) return;
+      setApplyIndex(index);
+      setApplyJob(job);
+    },
+    [queueJobs],
+  );
+
+  const closeApply = useCallback(() => {
+    setApplyJob(null);
+    setApplyQueue([]);
+    setApplyIndex(0);
+  }, []);
+
+  /* ── 지원 현황 내보내기 (프리미엄) ── */
+
+  const exportPipeline = useCallback(() => {
+    const trackedJobs = hubJobs.filter((job) => job.source.kind !== "auto" || isTrackedJob(job));
+    if (!trackedJobs.length) {
+      notify("내보낼 지원 현황이 없습니다. 공고를 담으면 여기에 쌓입니다.", "warn");
+      return;
+    }
+    const stamp = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    downloadCsv(
+      `jobfit-지원현황-${stamp.getFullYear()}${pad(stamp.getMonth() + 1)}${pad(stamp.getDate())}.csv`,
+      buildPipelineCsv(trackedJobs),
+    );
+    notify(`지원 현황 ${trackedJobs.length}건을 CSV로 내려받았습니다 — 엑셀에서 바로 열립니다.`);
+  }, [hubJobs, notify]);
 
   /* ── 지원 패키지 (공고 한 건, 규칙으로 즉시) ── */
 
@@ -771,7 +1028,7 @@ export default function App() {
   const refineKit = useCallback(async () => {
     if (!kit) return;
     if (!features.aiRefine) {
-      notify("AI로 다듬기는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+      notify("AI로 다듬기는 유료 플랜 기능입니다. 요금제에서 14일 무료 체험을 켜면 열립니다.", "warn");
       setPricingOpen(true);
       return;
     }
@@ -930,7 +1187,7 @@ export default function App() {
   const openDeep = useCallback(
     async (hubJob: HubJob) => {
       if (!features.deepPrep) {
-        notify("90초 면접 연습과 심층 준비는 Pro 기능입니다. 요금제에서 14일 체험을 켜면 열립니다.", "warn");
+        notify("90초 면접 연습과 심층 준비는 유료 플랜 기능입니다. 요금제에서 14일 무료 체험을 켜면 열립니다.", "warn");
         setPricingOpen(true);
         return;
       }
@@ -1071,20 +1328,39 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  /** 내 이력서와 실제로 맞는 공고 요약 — 첫 화면에 ‘맞춤 공고 N건’으로 보입니다. */
+  const docMatchSummary = useMemo(() => {
+    const scored = hubJobs
+      .filter((job) => job.source.kind === "auto" && !isTrackedJob(job))
+      .map((job) => docFits[job.id])
+      .filter((match): match is DocMatch => Boolean(match && !match.needsKit));
+    // ‘맞춤’은 내 서류 키워드가 2개 이상 실제로 걸린 공고입니다 (1개만 걸린 우연을 빼기 위해).
+    const strong = scored.filter((match) => match.matched.length >= 2);
+    return {
+      count: strong.length,
+      total: scored.length,
+      top: strong.length ? Math.max(...strong.map((match) => match.score)) : 0,
+    };
+  }, [docFits, hubJobs]);
+
   const hubProps = {
     resume,
     resumeMeta,
     resumeBusy,
     onOpenResume: () => setResumeOpen(true),
     onSampleResume: useSampleResume,
+    onResumeText: (text: string) => void importResumeText(text),
     careerKit,
     onDocFile: (file: File, kind?: CareerDocKind) => void importDoc(file, kind),
     onRemoveDoc: removeDocument,
     onPortfolioUrl: setPortfolioUrl,
-    onCollectDocs: () => void collectFromDocs(),
+    onCollectDocs: collectFromDocs,
     collectingDocs,
+    resumeFlow,
+    docMatchSummary,
     docFits,
-    onOpenApply: (job: HubJob) => setApplyJob(job),
+    onOpenApply: openApply,
+    onOpenApplyQueue: openApplyQueue,
     jobs: hubJobs,
     selected,
     onSelect: (id: string) => {
@@ -1188,6 +1464,8 @@ export default function App() {
                 onOpenStudio={() => changeView("studio")}
                 pipelineLimit={features.pipelineLimit}
                 onOpenPricing={openPricing}
+                canExport={features.deskExport}
+                onExport={exportPipeline}
               />
             ) : deepOpen && pkg ? (
               <ResultFlow
@@ -1259,11 +1537,17 @@ export default function App() {
             resume={resume}
             draft={applyTarget.draft ?? null}
             docMatch={docFits[applyTarget.id] ?? null}
-            onClose={() => setApplyJob(null)}
+            prep={prepCache[applyTarget.id] ?? null}
+            prepBusy={prepBusyId === applyTarget.id}
+            onPrepare={() => void prepareApply(applyTarget)}
+            queue={queueJobs.length > 1 ? { index: applyIndex, total: queueJobs.length } : null}
+            onStep={() => stepQueue(applyIndex + 1)}
+            onPrev={() => stepQueue(applyIndex - 1)}
+            onClose={closeApply}
             onUpdate={updateJob}
             onRecord={recordApplication}
             onOpenKit={() => {
-              setApplyJob(null);
+              closeApply();
               window.setTimeout(() => document.querySelector("[data-testid=career-strip]")?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
             }}
           />
@@ -1275,8 +1559,8 @@ export default function App() {
             <div className="animate-rise relative z-10 w-full max-w-[540px] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
               <div className="flex items-start justify-between px-5 pt-5">
                 <div>
-                  <div className="eyebrow">Guide</div>
-                  <h2 className="mt-1 text-[15px] font-semibold">이렇게 사용합니다</h2>
+                  <h2 className="text-[15px] font-semibold">이렇게 사용합니다</h2>
+                  <p className="mt-1 text-[10.5px] text-muted">이력서 한 장에서 지원 접수까지 이어지는 순서</p>
                 </div>
                 <button type="button" onClick={() => setHelpOpen(false)} className="rounded-md p-1 text-muted hover:bg-paper-deep" aria-label="닫기">
                   <X size={16} />
@@ -1284,17 +1568,16 @@ export default function App() {
               </div>
               <ol className="mt-4 max-h-[54vh] space-y-2.5 overflow-y-auto px-5">
                 {[
-                  "첫 화면에서는 리멤버·원티드·사람인·잡코리아에서 서울 인하우스 홍보·PR 과차장급 공고를 자동으로 모아 옵니다. 다른 직무 프리셋을 고르거나 키워드를 직접 넣어도 됩니다.",
-                  "‘내 커리어 프로필’에 직무·경력 연차·핵심 키워드·희망 연봉·제외 키워드를 저장하면 공고마다 같은 기준으로 적합도(0~100%)를 계산합니다. 점수에 쓴 비중과 근거, 맞는 키워드와 빠진 키워드를 카드와 상세 화면에 그대로 보여 줍니다.",
-                  "카드를 고르면 주요 업무·자격 요건·우대 사항·마감일과 원문 지원 링크가 열립니다. 목록 정보만 있는 공고는 ‘원문에서 요건 읽어오기’로 채웁니다.",
-                  "이력서·자기소개서·포트폴리오를 각각 올려 두세요. 세 서류에서 확인된 직무 키워드가 ‘내 서류로 공고 수집’ 버튼의 검색어가 되고, 같은 키워드로 공고마다 ‘서류 적합 %’와 맞은 지점(어느 서류의 어떤 말이 공고 어디에 있었는지)을 보여 줍니다.",
-                  "이력서를 등록하면 공고마다 내 경력 문장으로 만든 한 줄 어필·지원서 초안이 바로 나옵니다. 이어서 ‘지원 패키지’에서 경력기술서 어필 3선·1분 자기소개·예상 면접 질문 5개와 답변 전략·연봉 협상 스크립트를 복사하거나 MD·인쇄로 내보냅니다.",
-                  "사이트가 막히거나 로그인해야 열리는 공고는 ‘공고 URL·JD 직접 분석’ 탭에 주소나 본문을 붙여넣으면 같은 적합도·지원 패키지를 만듭니다.",
-                  "공고의 ‘바로 지원하기’는 서류 준비 상태를 확인하고 공고 맞춤 한 줄 어필·자소서 핵심 문단·이메일 본문을 복사하게 해 줍니다. 채용 사이트에서 제출한 뒤 ‘지원 완료로 기록’을 누르면 제출 시각·서류·경로가 남고 지원완료 칸으로 옮겨집니다. 로그인과 지원서 양식은 직접 진행합니다.",
-                  "‘원문에서 지원하기’를 누르면 실제 공고가 새 탭으로 열립니다. 지원 후 상태를 관심 공고 → 지원 완료 → 서류 합격 → 면접 진행 → 최종 오퍼로 옮기고 메모·마감 D-day를 관리하세요.",
-                  "카드의 북마크를 누르면 ‘내 지원’에 남아 다음 방문에도 유지됩니다. 제출서류 체크도 함께 저장됩니다.",
+                  "이력서(PDF·Word·TXT·MD)를 올리거나 본문을 붙여넣으면 직무·경력 연차·핵심 키워드·성과 문장을 읽어 커리어 프로필을 자동으로 채웁니다. AI가 연결돼 있으면 한 번 더 정확하게 읽고, 없으면 이력서에 적힌 값만으로 채웁니다.",
+                  "프로필이 채워지는 즉시, 그 이력서 기준 키워드로 리멤버·원티드·사람인·잡코리아에서 맞춤 공고를 자동으로 모아 0~100% 적합도와 서류 대조를 매깁니다. 첫 화면 위에 ‘내 이력서 기준 맞춤 공고 N건’이 뜹니다.",
+                  "다른 직무도 보고 싶으면 직무 프리셋을 고르거나 키워드를 직접 넣어 다시 모을 수 있습니다. 공고 카드의 점수는 프로필에 저장된 조건으로 계산하며, 근거와 빠진 키워드를 카드와 상세에 그대로 보여 줍니다.",
+                  "공고를 고르면 주요 업무·자격 요건·우대 사항·마감일과 원문 지원 링크가 열립니다. 목록 정보만 있는 공고는 ‘원문에서 요건 읽어오기’로 채웁니다.",
+                  "‘바로 지원하기’를 누르면 이 공고에 맞춘 한 줄 어필·지원 동기·1분 자기소개·면접 예상 질문 5개와 답변 스크립트가 한 드로어에서 자동으로 만들어집니다. 각 항목은 복사 버튼으로 바로 붙여넣습니다.",
+                  "상단의 ‘연속 지원 준비’는 내 이력서와 적합도가 높은 3건을 같은 드로어에서 차례로 준비합니다. 한 건을 기록하면 다음 공고로 넘어갑니다.",
+                  "채용 사이트 로그인과 지원서 최종 제출은 직접 해야 합니다. 계정 보안과 최종 확인은 대신 누를 수 없기 때문에, 여기서는 문구 준비와 ‘지원 완료로 기록’(제출 시각·서류·경로)까지만 맡습니다.",
+                  "지원 상태는 관심 공고 → 지원 완료 → 서류 합격 → 면접 진행 → 최종 오퍼로 옮기고 메모·마감 D-day를 관리합니다. 프리미엄은 이 현황을 CSV로 내려받아 엑셀에서도 봅니다.",
                   "공고·상태·메모·지원 문구·프로필은 이 브라우저에만 저장됩니다. 서류는 파일 이름·글자 수·추출 요약·키워드만 저장하고 원문은 저장하지 않습니다. 원문에 없는 경험·수치는 AI도 만들지 않습니다.",
-                  "오른쪽 위 플랜 배지를 누르면 요금제가 열립니다. 수집·적합도·이력서 파싱은 계속 무료이고, 지원 패키지 4종 전체·AI 다듬기·연봉 협상·무제한 파이프라인은 Pro입니다. 결제 연동 전이라 ‘Pro 무료 체험’을 켜서 확인합니다.",
+                  "오른쪽 위 플랜 배지를 누르면 요금제가 열립니다. 1개월 집중 49,000원 · 3개월 이직 패스 119,000원 · 프리미엄 커리어 패스 249,000원이고, 결제 연동 전이라 ‘14일 무료 체험’으로 확인합니다.",
                 ].map((text, index) => (
                   <li key={index} className="flex gap-2.5">
                     <span className="num mt-[1px] grid h-5 w-5 shrink-0 place-items-center rounded-md bg-paper-deep text-[9.5px] font-semibold text-muted">

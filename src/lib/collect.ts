@@ -306,8 +306,14 @@ export function isTrackedJob(job: HubJob): boolean {
 }
 
 /** 자동 수집 결과를 기존 보드에 합칩니다. 손댄 공고·직접 추가한 공고는 그대로 둡니다. */
-export function mergeCollected(prev: HubJob[], collected: CollectedJob[], fetchedAt: string): HubJob[] {
-  const kept = prev.filter((job) => job.source.kind !== "auto" || isTrackedJob(job));
+export function mergeCollected(
+  prev: HubJob[],
+  collected: CollectedJob[],
+  fetchedAt: string,
+  /** 내 서류로 다시 모을 때는 보고 있던 자동 수집분을 지우지 않고 더합니다 */
+  keepAuto = false,
+): HubJob[] {
+  const kept = keepAuto ? prev : prev.filter((job) => job.source.kind !== "auto" || isTrackedJob(job));
   const keyOf = (value: string) => value.replace(/[\s()[\]{}·,.\-–—_/&]+/g, "").toLowerCase();
   const seen = new Set(kept.flatMap((job) => [
     `${job.source.sourceId ?? job.source.kind}:${job.source.sourceJobId ?? job.id}`,

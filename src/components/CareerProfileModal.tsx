@@ -115,7 +115,7 @@ export function CareerProfileModal({
       <div className="animate-rise relative z-10 my-auto w-full max-w-[620px] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
         <div className="flex items-start justify-between border-b border-line px-5 py-3.5">
           <div>
-            <div className="eyebrow">Career profile</div>
+            <div className="eyebrow">커리어 프로필</div>
             <h2 className="mt-1 text-[15px] font-semibold text-ink">내 커리어 프로필</h2>
             <p className="mt-0.5 text-[10.5px] leading-relaxed text-muted">
               여기 적은 조건으로 모든 공고의 적합도를 계산합니다. 비워 둔 항목은 점수에서 빠집니다.

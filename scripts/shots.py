@@ -141,7 +141,7 @@ def calm(page, ms=800):
 
 
 PLAN = {
-    "plan": "pro",
+    "plan": "pass",
     "trial": True,
     "startedAt": "2026-11-24T00:00:00.000Z",
     "expiresAt": "2026-12-08T00:00:00.000Z",
@@ -178,7 +178,7 @@ def new_page(browser, mobile: bool, saved: bool, wait: str = "hub-job", pro: boo
 def main():
     start_server()
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
 
         # 01~03 · 05: 수집된 공고 + 적합도 + 지원 패키지 (담은 공고 없이)
         ctx, page = new_page(browser, mobile=False, saved=False)
@@ -200,7 +200,7 @@ def main():
         page.wait_for_timeout(700)
         calm(page, 600)
         page.screenshot(path=f"{OUT}/09-desktop-pricing.png")
-        page.click("[data-testid=plan-select-pro]")
+        page.click("[data-testid=plan-select-pass]")
         page.wait_for_timeout(700)
 
         page.locator("[data-testid=hub-kit]").scroll_into_view_if_needed()
@@ -236,6 +236,30 @@ def main():
         mp.click("[data-testid=nav-tracker]")
         mp.wait_for_timeout(1200)
         mp.screenshot(path=f"{OUT}/08-mobile-pipeline.png")
+        ctx.close()
+
+        # 10: 지원 드로어 — 1분 자기소개·예상 질문 자동 준비
+        ctx, page = new_page(browser, mobile=False, saved=False, pro=True)
+        page.locator("[data-testid=hub-job]").first.click()
+        page.wait_for_timeout(1000)
+        page.click("[data-testid=apply-open]")
+        page.wait_for_selector("[data-testid=apply-drawer]", timeout=15000)
+        page.wait_for_timeout(2200)
+        calm(page, 600)
+        page.screenshot(path=f"{OUT}/10-desktop-apply.png")
+        page.click("[data-testid=apply-record]")
+        page.wait_for_timeout(900)
+        page.screenshot(path=f"{OUT}/10b-desktop-apply-recorded.png")
+        ctx.close()
+
+        # 11: 모바일 지원 드로어
+        ctx, mp = new_page(browser, mobile=True, saved=False, pro=True)
+        mp.locator("[data-testid=hub-job]").first.click()
+        mp.wait_for_timeout(1000)
+        mp.click("[data-testid=apply-open]")
+        mp.wait_for_selector("[data-testid=apply-drawer]", timeout=15000)
+        mp.wait_for_timeout(2000)
+        mp.screenshot(path=f"{OUT}/11-mobile-apply.png")
         ctx.close()
         browser.close()
     print("saved:", sorted(os.listdir(OUT)))

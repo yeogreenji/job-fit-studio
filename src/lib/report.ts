@@ -1,4 +1,4 @@
-import type { JobPackage } from "../types";
+import type { HubJob, JobPackage } from "../types";
 import { buildLocalIntro, buildLocalReverse, speakingSeconds } from "./coach";
 
 const SECTION_LABEL: Record<string, string> = {
@@ -212,6 +212,41 @@ export function buildInterviewSheet(pkg: JobPackage): string {
 
 export function downloadText(filename: string, text: string) {
   const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** 지원 현황 전체를 CSV로 — 엑셀에서 바로 열립니다. */
+export function buildPipelineCsv(jobs: HubJob[]): string {
+  const cell = (value: string) => {
+    const text = value.replace(/\r?\n/g, " ").replace(/"/g, '""').trim();
+    return `"${text}"`;
+  };
+  const header = ["회사", "직무", "상태", "근무지", "경력 조건", "마감", "지원일", "제출 서류", "메모", "공고 링크"];
+  const rows = jobs.map((job) => [
+    job.job.company,
+    job.job.role,
+    job.status,
+    job.job.location,
+    job.job.experience ?? "",
+    job.job.deadline,
+    job.applied ? new Date(job.applied.at).toLocaleDateString("ko-KR") : "",
+    job.applied?.documents.join(" · ") ?? job.documentsChecked.join(" · "),
+    job.memo,
+    job.applyUrl,
+  ]);
+  return [header, ...rows].map((row) => row.map(cell).join(",")).join("\r\n");
+}
+
+export function downloadCsv(filename: string, text: string) {
+  // 엑셀이 한국어를 깨지 않게 BOM을 붙입니다.
+  const blob = new Blob([`\ufeff${text}`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

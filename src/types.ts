@@ -417,12 +417,12 @@ export interface CareerProfile {
 
 /* ── 요금제 ── */
 
-export type PlanId = "free" | "pro" | "pass";
+export type PlanId = "free" | "focus" | "pass" | "premium";
 
 /** 이 브라우저에 저장된 요금제 상태. 결제 연동 전에는 데모 활성화로만 바뀝니다. */
 export interface PlanState {
   plan: PlanId;
-  /** 무료 체험(데모)으로 열린 Pro인지 */
+  /** 무료 체험(데모)으로 열린 상태인지 */
   trial: boolean;
   startedAt: string;
   expiresAt: string | null;
@@ -577,6 +577,23 @@ export interface DocMatch {
   summary: string;
   /** 서류가 없어 계산하지 못했는지 */
   needsKit: boolean;
+}
+
+/** 지원 드로어에서 미리 준비해 두는 문구 묶음 (지원 동기·1분 자기소개·예상 질문) */
+export interface ApplyPrep {
+  /** 1분 자기소개 — 면접 첫 질문 대비 */
+  intro: string;
+  /** 예상 질문 5개와 말하기 스크립트 */
+  questions: {
+    question: string;
+    why: string;
+    answer: string;
+    avoid?: string;
+    category?: string;
+  }[];
+  source: EngineKind;
+  model?: string;
+  at: string;
 }
 
 /** ‘바로 지원하기’에서 만드는 제출용 묶음 */

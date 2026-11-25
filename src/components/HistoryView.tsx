@@ -236,7 +236,7 @@ export function HistoryView({
 
           <div className="space-y-3">
             <Card className="p-4">
-              <SectionHead eyebrow="Scores" title="회사별 적합도" desc="생성 시점의 키워드 일치 기준" />
+              <SectionHead eyebrow="적합도" title="회사별 적합도" desc="생성 시점의 키워드 일치 기준" />
               <div className="mt-3 space-y-2.5">
                 {[...packages]
                   .sort((a, b) => b.match.score - a.match.score)

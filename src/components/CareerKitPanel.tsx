@@ -20,7 +20,7 @@ import { profileSummary } from "../lib/career";
 import { resumeBulletCount, resumeReady, type ResumeMeta } from "../lib/storage";
 import { Card, cx } from "./ui";
 
-const ACCEPT = ".txt,.md,.markdown,.pdf,text/plain,application/pdf";
+const ACCEPT = ".txt,.md,.markdown,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 /**
  * 커리어 서류 허브 — 이력서 · 자기소개서 · 포트폴리오를 한 카드에 모읍니다.
@@ -35,13 +35,18 @@ export function CareerKitPanel({
   kit,
   profile,
   profileSaved,
+  resumeFlow,
+  docMatchSummary,
+  docCollected,
   onDocFile,
   onRemoveDoc,
   onPortfolioUrl,
   onOpenResume,
   onSampleResume,
+  onResumeText,
   onOpenProfile,
   onCollectDocs,
+  onPrepareTop,
   collecting,
 }: {
   resume: MasterResume;
@@ -50,13 +55,19 @@ export function CareerKitPanel({
   kit: CareerKit;
   profile: CareerProfile;
   profileSaved: boolean;
+  resumeFlow: { stage: string; matched: number | null } | null;
+  docMatchSummary: { count: number; total: number; top: number };
+  /** 내 이력서 키워드로 공고를 모은 적이 있는지 */
+  docCollected: boolean;
   onDocFile: (file: File, kind?: CareerDocKind) => void;
   onRemoveDoc: (kind: CareerDocKind) => void;
   onPortfolioUrl: (url: string) => void;
   onOpenResume: () => void;
   onSampleResume: () => void;
+  onResumeText: (text: string) => void;
   onOpenProfile: () => void;
   onCollectDocs: () => void;
+  onPrepareTop: () => void;
   collecting: boolean;
 }) {
   const resumeInput = useRef<HTMLInputElement>(null);
@@ -64,6 +75,8 @@ export function CareerKitPanel({
   const portfolioInput = useRef<HTMLInputElement>(null);
   const multiInput = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
 
   const ready = resumeReady(resume);
   const bullets = resumeBulletCount(resume);
@@ -87,6 +100,36 @@ export function CareerKitPanel({
 
   return (
     <Card className="overflow-hidden" testId="career-strip">
+      {/* 0행 · 이력서 한 번 → 프로필 → 맞춤 공고 → 지원 준비 */}
+      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 border-b border-line bg-[#fcfcfa] px-3 py-1.5" data-testid="resume-pipeline">
+        {[
+          { label: "이력서 올리기", done: ready },
+          { label: "프로필 자동 채움", done: profileSaved && Boolean(profile.role) },
+          { label: "맞춤 공고 자동 수집", done: docMatchSummary.count > 0 },
+          { label: "지원 문구·자기소개", done: false },
+        ].map((stage, index) => (
+          <span key={stage.label} className="flex items-center gap-1 text-[9.5px]">
+            <span
+              className={cx(
+                "num grid h-4 w-4 place-items-center rounded text-[8px] font-semibold",
+                stage.done ? "bg-accent text-white" : "bg-paper-deep text-muted",
+              )}
+            >
+              {stage.done ? <Check size={9} strokeWidth={3} /> : index + 1}
+            </span>
+            <span className={stage.done ? "font-semibold text-ink-2" : "text-muted"}>{stage.label}</span>
+            {index < 3 && <span className="mx-0.5 h-px w-2.5 bg-line-strong" />}
+          </span>
+        ))}
+        <span className="ml-auto text-[9px] text-faint">이력서 하나로 끝까지 이어집니다</span>
+      </div>
+
+      {resumeFlow && (
+        <div className="flex items-center gap-1.5 border-b border-line bg-accent-soft/60 px-3 py-1.5 text-[10px] text-accent-deep" data-testid="resume-flow">
+          <Loader2 size={10} className="animate-spin" /> {resumeFlow.stage}
+        </div>
+      )}
+
       {/* 1행 · 커리어 프로필 + 서류 상태 + 수집 실행 */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2">
         <span className={cx("grid h-6 w-6 shrink-0 place-items-center rounded-md text-white", profileSaved ? "bg-accent" : "bg-ink/75")}>
@@ -136,6 +179,41 @@ export function CareerKitPanel({
           </button>
         </div>
       </div>
+
+      {/* 1-b행 · 이력서 기준 맞춤 공고 결과 */}
+      {kitReady(kit) && (docMatchSummary.count > 0 || collecting || docCollected) && (
+        <div
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-line bg-accent-soft/35 px-3 py-1.5"
+          data-testid="doc-match-banner"
+        >
+          <BadgeCheck size={12} className="text-accent" />
+          <span className="text-[11px] text-ink-2">
+            내 이력서 기준 맞춤 공고{" "}
+            <strong className="num text-[12.5px] font-semibold text-accent-deep" data-testid="doc-match-count">
+              {collecting ? "찾는 중" : `${docMatchSummary.count}건`}
+            </strong>
+            {!collecting && docMatchSummary.count === 0 && (
+              <span className="ml-1 text-[9.5px] text-muted">조건에 맞는 공고가 없어요 — 키워드를 조금 넓혀 보세요</span>
+            )}
+            {!collecting && docMatchSummary.count > 0 && (
+              <span className="ml-1 text-[9.5px] text-muted">서류 키워드 2개 이상 일치 · 최고 {docMatchSummary.top}%</span>
+            )}
+          </span>
+          {keywords.length > 0 && (
+            <span className="hidden min-w-0 truncate text-[9px] text-faint sm:inline">검색어 {keywords.map((term) => `‘${term}’`).join(" · ")}</span>
+          )}
+          {docMatchSummary.count > 0 && (
+            <button
+              type="button"
+              onClick={onPrepareTop}
+              className="btn btn-primary ml-auto h-7 px-2.5 text-[10px]"
+              data-testid="prepare-top"
+            >
+              <Radar size={10} /> 상위 3건 지원 준비
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 2행 · 서류 3슬롯 */}
       <div
@@ -188,6 +266,9 @@ export function CareerKitPanel({
                 <button type="button" onClick={() => resumeInput.current?.click()} className="btn btn-outline h-6 px-1.5 text-[10px]" data-testid="resume-replace">
                   <Upload size={10} /> 교체
                 </button>
+                <button type="button" onClick={() => setPasteOpen((prev) => !prev)} className="btn btn-ghost h-6 px-1 text-[9.5px] text-muted" data-testid="resume-paste-toggle">
+                  붙여넣기
+                </button>
                 <button
                   type="button"
                   onClick={() => onRemoveDoc("resume")}
@@ -213,7 +294,38 @@ export function CareerKitPanel({
                   샘플
                 </button>
               </div>
+              <button type="button" onClick={() => setPasteOpen((prev) => !prev)} className="mt-1 text-[9.5px] text-muted underline-offset-2 hover:underline" data-testid="resume-paste-toggle">
+                또는 이력서 내용 붙여넣기
+              </button>
             </>
+          )}
+          {pasteOpen && (
+            <div className="mt-1.5 rounded-lg border border-line bg-surface p-1.5" data-testid="resume-paste-panel">
+              <textarea
+                className="field min-h-[72px] text-[10.5px] leading-relaxed"
+                placeholder={"이력서 내용을 그대로 붙여넣으세요.\n\n경력\n회사 | 직함 | 기간\n- 성과 문장"}
+                value={pasteText}
+                onChange={(event) => setPasteText(event.target.value)}
+                data-testid="resume-paste-text"
+                aria-label="이력서 본문"
+              />
+              <div className="mt-1 flex items-center gap-1">
+                <span className="text-[8.5px] text-faint">{pasteText.trim().length >= 40 ? "붙여넣은 내용으로 프로필을 채우고 공고를 찾습니다" : "40자 이상"}</span>
+                <button
+                  type="button"
+                  disabled={pasteText.trim().length < 40}
+                  onClick={() => {
+                    onResumeText(pasteText);
+                    setPasteText("");
+                    setPasteOpen(false);
+                  }}
+                  className="btn btn-primary ml-auto h-6 px-2 text-[10px] disabled:opacity-50"
+                  data-testid="resume-paste-run"
+                >
+                  이 내용으로 저장
+                </button>
+              </div>
+            </div>
           )}
           <input
             ref={resumeInput}

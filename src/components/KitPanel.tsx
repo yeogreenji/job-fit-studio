@@ -50,7 +50,7 @@ export function KitPanel({
   onExport: () => void;
   onPrint: () => void;
   onOpenDeep: () => void;
-  /** Pro 이상이면 4종 전체, Free는 ①번만 */
+  /** 유료 플랜이면 4종 전체, Free는 ①번만 */
   unlocked: boolean;
   onOpenPricing: () => void;
 }) {
@@ -102,10 +102,10 @@ export function KitPanel({
                   className="btn btn-ghost h-7 px-2 text-[10.5px] text-muted"
                   data-testid="kit-ai"
                   data-locked="true"
-                  title="Pro 기능 — 요금제에서 열기"
+                  title="유료 플랜 기능 — 요금제에서 열기"
                 >
                   <Lock size={10} /> AI로 다듬기
-                  <span className="rounded bg-ink px-1 py-0.5 text-[8px] font-semibold leading-none text-white">PRO</span>
+                  <span className="rounded bg-ink px-1 py-0.5 text-[8px] font-semibold leading-none text-white">패스</span>
                 </button>
               ))}
           </span>
@@ -182,7 +182,7 @@ export function KitPanel({
                     active ? "border-ink bg-ink text-white" : "border-line bg-surface text-muted hover:border-line-strong hover:text-ink-2",
                     item.pro && !unlocked && !active && "text-faint",
                   )}
-                  title={item.pro && !unlocked ? `${item.hint} · Pro 기능` : item.hint}
+                  title={item.pro && !unlocked ? `${item.hint} · 유료 플랜 기능` : item.hint}
                 >
                   {item.pro && !unlocked && <Lock size={9} />}
                   {item.label}
@@ -194,7 +194,7 @@ export function KitPanel({
               onClick={unlocked ? onOpenDeep : onOpenPricing}
               className="btn btn-ghost ml-auto h-7 px-2 text-[10px] text-muted"
               data-testid="deep-open"
-              title={unlocked ? "90초 답변 연습과 역질문" : "Pro 기능 — 요금제에서 열기"}
+              title={unlocked ? "90초 답변 연습과 역질문" : "유료 플랜 기능 — 요금제에서 열기"}
             >
               {unlocked ? <Mic size={11} /> : <Lock size={10} />} 90초 면접 연습
             </button>
@@ -206,15 +206,15 @@ export function KitPanel({
                 <div className="flex items-center gap-1.5">
                   <Lock size={12} className="text-accent" />
                   <span className="text-[11.5px] font-semibold text-ink">{tabMeta.label}은 Pro에서 열립니다</span>
-                  <span className="chip ml-auto bg-ink px-1.5 py-0 text-[8.5px] text-white">PRO</span>
+                  <span className="chip ml-auto bg-ink px-1.5 py-0 text-[8.5px] text-white">패스</span>
                 </div>
                 <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted">
-                  지원 패키지 4종(어필 3선 · 1분 자기소개 · 면접 질문 5 · 연봉 협상)과 AI 문장 다듬기는 Pro 기능입니다. Free에서는
+                  지원 패키지 4종(어필 3선 · 1분 자기소개 · 면접 질문 5 · 연봉 협상)과 AI 문장 다듬기는 유료 플랜 기능입니다. Free에서는
                   ①경력 어필 3선과 바로 쓰는 지원 문구까지 쓸 수 있습니다.
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <button type="button" onClick={onOpenPricing} className="btn btn-primary h-7 px-2.5 text-[10.5px]" data-testid="kit-unlock">
-                    Pro 14일 체험 켜기
+                    14일 무료 체험 켜기
                   </button>
                   <span className="text-[9px] text-faint">결제 없이 이 브라우저에서 바로 열립니다</span>
                 </div>

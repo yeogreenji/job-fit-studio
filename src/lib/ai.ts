@@ -287,6 +287,34 @@ export async function requestAiApplyKit(input: ApplyKitRequestInput): Promise<{ 
   return post<AiApplyKitData>(body, 60000);
 }
 
+export interface AiResumeProfileData {
+  role?: string;
+  years?: number;
+  keywords?: string[];
+  summary?: string;
+  achievements?: string[];
+  locations?: string[];
+  salary?: number | null;
+}
+
+export interface ResumeProfileRequestInput {
+  text: string;
+  fileName?: string;
+  config: AiConfig;
+}
+
+/** 이력서 본문을 보내 대표 직무·연차·키워드·요약·성과를 뽑습니다. */
+export async function requestAiResumeProfile(input: ResumeProfileRequestInput): Promise<{ model?: string; data: AiResumeProfileData }> {
+  const body = {
+    mode: "resume_profile" as const,
+    apiKey: keyOf(input.config),
+    model: input.config.model || undefined,
+    fileName: input.fileName ?? "",
+    text: input.text.slice(0, 19_000),
+  };
+  return post<AiResumeProfileData>(body, 50000);
+}
+
 export interface RecommendRequestInput {
   resume: MasterResume;
   config: AiConfig;

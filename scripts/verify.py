@@ -209,7 +209,36 @@ JOB_PAYLOAD = {
     "tone": "작품과 사람을 먼저 보는 팀",
 }
 
-PLAN_PRO = {"plan": "pro", "trial": True, "startedAt": "2026-11-24T00:00:00.000Z", "expiresAt": "2026-12-08T00:00:00.000Z"}
+PLAN_PRO = {"plan": "pass", "trial": True, "startedAt": "2026-11-24T00:00:00.000Z", "expiresAt": "2026-12-08T00:00:00.000Z"}
+PLAN_PREMIUM = {"plan": "premium", "trial": False, "startedAt": "2026-11-25T00:00:00.000Z", "expiresAt": "2027-05-24T00:00:00.000Z"}
+
+SEED_HUB_JOBS = [
+    {
+        "id": "auto-wanted-91",
+        "job": {
+            "id": "wanted:91",
+            "company": "누리커머스",
+            "role": "PR 매니저",
+            "employmentType": "정규직",
+            "location": "서울 성동구",
+            "deadline": "2026-12-10",
+            "responsibilities": "보도자료 작성과 미디어 대응",
+            "requirements": "PR 경력 5년 이상",
+            "preferred": "",
+            "tone": "",
+            "experience": "경력 5~8년",
+            "detailLevel": "full",
+        },
+        "source": {"kind": "auto", "sourceId": "wanted", "sourceJobId": "91", "site": "원티드", "url": "https://www.wanted.co.kr/wd/91"},
+        "applyUrl": "https://www.wanted.co.kr/wd/91",
+        "status": "준비중",
+        "memo": "1차 통화 완료",
+        "documentsChecked": [],
+        "saved": True,
+        "createdAt": "2026-11-25T00:00:00.000Z",
+        "updatedAt": "2026-11-25T00:00:00.000Z",
+    }
+]
 
 AI = "http://127.0.0.1:4383/"
 OFFLINE = "http://127.0.0.1:4384/"
@@ -227,7 +256,7 @@ start_server("strict", 4387)
 print("── API", flush=True)
 status, body, headers = api(4383)
 check("api GET status", status == 200 and body.get("ok") is True and body.get("ai") is True, str(body)[:120])
-check("api modes include hub modes", {"job_url", "apply_kit", "package", "recommend"}.issubset(set(body.get("modes") or [])), str(body.get("modes")))
+check("api modes include hub modes", {"job_url", "apply_kit", "package", "recommend", "resume_profile"}.issubset(set(body.get("modes") or [])), str(body.get("modes")))
 check("api CORS header", headers.get("Access-Control-Allow-Origin") == "*", str(headers.get("Access-Control-Allow-Origin")))
 status, _, _ = api(4383, "OPTIONS")
 check("api OPTIONS 204", status == 204, str(status))
@@ -407,6 +436,41 @@ check("analyze job_url blocked", status == 422 and body["error"]["code"] == "fet
 status, body, _ = api(4383, "POST", {"mode": "apply_kit", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD})
 data = body.get("data") or {}
 check("analyze apply_kit", status == 200 and bool(data.get("oneLiner")) and len(data.get("coverLetter") or "") > 150, f"{status} {str(body)[:120]}")
+RESUME_TEXT = open(os.path.join(FIXTURES, "my-resume.txt"), encoding="utf-8").read()
+status, body, _ = api(4383, "POST", {"mode": "resume_profile", "text": RESUME_TEXT})
+data = body.get("data") or {}
+check(
+    "analyze resume_profile",
+    status == 200 and data.get("role") == "브랜드 커뮤니케이션 매니저" and data.get("years") == 6,
+    f"{status} {str(body)[:160]}",
+)
+check(
+    "analyze resume_profile keywords grounded",
+    len(data.get("keywords") or []) >= 4 and all(term in RESUME_TEXT for term in data.get("keywords") or []),
+    str(data.get("keywords"))[:160],
+)
+check(
+    "analyze resume_profile achievements verbatim",
+    len(data.get("achievements") or []) >= 2 and all(line in RESUME_TEXT for line in data.get("achievements") or []),
+    str(data.get("achievements"))[:160],
+)
+status, body, _ = api(4383, "POST", {"mode": "resume_profile", "text": RESUME_TEXT + "\nGROUND_CHECK"})
+data = body.get("data") or {}
+check(
+    "analyze resume_profile drops invented values",
+    status == 200
+    and not data.get("role")
+    and data.get("years") == 0
+    and not data.get("keywords")
+    and not data.get("summary")
+    and not data.get("achievements")
+    and not data.get("locations")
+    and data.get("salary") is None,
+    str(data)[:200],
+)
+status, body, _ = api(4383, "POST", {"mode": "resume_profile", "text": "짧음"})
+check("analyze resume_profile rejects short text", status == 400 and body["error"]["code"] == "bad_resume_text", f"{status} {str(body)[:120]}")
+
 status, body, _ = api(4383, "POST", {"mode": "package", "job": JOB_PAYLOAD, "resume": RESUME_PAYLOAD, "priorityLabel": "연봉 점프", "targetSalary": 5500})
 data = body.get("data") or {}
 check("analyze package", status == 200 and bool((data.get("fit") or {}).get("verdict")), f"{status} {str(body)[:120]}")
@@ -422,7 +486,7 @@ for port in (4384, 4385, 4386, 4387):
 
 
 with sync_playwright() as p:
-    browser = p.chromium.launch()
+    browser = p.chromium.launch(args=["--disable-dev-shm-usage"])
 
     # ────────────────────────── 첫 화면: 자동 수집 ──────────────────────────
     ctx = browser.new_context(viewport={"width": 1440, "height": 1000}, locale="ko-KR", accept_downloads=True, permissions=["clipboard-read", "clipboard-write"])
@@ -433,7 +497,7 @@ with sync_playwright() as p:
 
     def first_screen():
         check("banner live", wait_attr(page, "[data-testid=mode-banner]", "data-mode", "live"))
-        check("hub heading", page.get_by_text("공고는 알아서 모으고").count() >= 1)
+        check("hub heading", page.get_by_text("공고는 내 이력서 기준으로").count() >= 1)
         check("preset chips rendered", page.locator("[data-testid^=preset-]").count() >= 10, str(page.locator("[data-testid^=preset-]").count()))
         check("collect bar present", page.locator("[data-testid=collect-bar]").count() == 1)
         check("auto collect runs on first screen", wait_count(page, "[data-testid=hub-job]", 8, 90000), str(page.locator("[data-testid=hub-job]").count()))
@@ -465,20 +529,22 @@ with sync_playwright() as p:
         page.click("[data-testid=open-pricing]")
         page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
         check("pricing modal opens", page.locator("[data-testid=pricing-modal]").count() == 1)
-        check("pricing three plans", page.locator("[data-testid^=plan-card-]").count() == 3, str(page.locator("[data-testid^=plan-card-]").count()))
+        check("pricing four plans", page.locator("[data-testid^=plan-card-]").count() == 4, str(page.locator("[data-testid^=plan-card-]").count()))
         text = page.inner_text("[data-testid=pricing-modal]")
-        check("pricing prices", "19,900" in text and "49,000" in text, text[:160])
+        check("pricing prices", "49,000" in text and "119,000" in text and "249,000" in text, text[:200])
+        check("pricing three month pass cheaper than monthly x3", "39,667" in text, text[:200])
         check("pricing free is current", page.get_attribute("[data-testid=plan-card-free]", "data-active") == "true")
         check("pricing feature matrix", page.locator("[data-testid=pricing-matrix]").count() == 1)
+        check("pricing matrix four columns", page.locator("[data-testid=pricing-matrix] thead th").count() == 5)
         check("pricing faq", page.locator("[data-testid=pricing-faq]").count() == 1)
         check("pricing demo notice", "결제 연동 전" in text, text[:120])
-        check("pricing trial toggle off", page.get_attribute("[data-testid=plan-pro-trial]", "aria-checked") == "false")
-        page.click("[data-testid=plan-select-pro]")
+        check("pricing trial toggle off", page.get_attribute("[data-testid=plan-trial]", "aria-checked") == "false")
+        page.click("[data-testid=plan-select-pass]")
         page.wait_for_timeout(700)
         stored = json.loads(page.evaluate("localStorage.getItem('jobfit.plan.v1')") or "{}")
-        check("pro trial activated", stored.get("plan") == "pro" and stored.get("trial") is True, json.dumps(stored)[:140])
+        check("pass plan activated", stored.get("plan") == "pass" and stored.get("trial") is False, json.dumps(stored)[:140])
         check("pricing closed after select", page.locator("[data-testid=pricing-modal]").count() == 0)
-        check("plan badge shows pro", "Pro" in page.inner_text("[data-testid=open-pricing]"), page.inner_text("[data-testid=open-pricing]"))
+        check("plan badge shows pass", "이직 패스" in page.inner_text("[data-testid=open-pricing]"), page.inner_text("[data-testid=open-pricing]"))
         check("no overflow after pricing", no_overflow(page))
 
     step("plans and pricing", plans_and_pricing)
@@ -546,6 +612,15 @@ with sync_playwright() as p:
         page.wait_for_timeout(600)
         check("resume registered", "등록됨" in page.inner_text("[data-testid=resume-status]"))
         check("resume name", page.inner_text("[data-testid=resume-name]") == "김하람")
+        check("resume pipeline strip", page.locator("[data-testid=resume-pipeline]").count() == 1)
+        profile = json.loads(page.evaluate("localStorage.getItem('jobfit.career.v1')") or "{}")
+        check(
+            "resume auto fills profile",
+            profile.get("role") == "브랜드 커뮤니케이션 매니저" and profile.get("years") == 6,
+            json.dumps(profile, ensure_ascii=False)[:160],
+        )
+        check("resume auto collect runs", wait_text(page, "[data-testid=doc-query-note]", "내 서류 키워드", 30000), page.inner_text("[data-testid=collect-bar]")[:160])
+        check("resume match banner", page.locator("[data-testid=doc-match-banner]").count() == 1, page.inner_text("[data-testid=career-strip]")[:160])
         page.locator("[data-testid=hub-job]").first.click()
         page.wait_for_timeout(1500)
         check("draft source appears", page.locator("[data-testid=draft-source]").count() == 1)
@@ -581,13 +656,13 @@ with sync_playwright() as p:
         page.click("[data-testid=kit-tab-negotiation]")
         page.wait_for_timeout(300)
         check("free kit negotiation locked", page.locator("[data-testid=kit-locked]").count() == 1)
-        check("free kit lock copy", "Pro" in page.inner_text("[data-testid=kit-locked]"), page.inner_text("[data-testid=kit-locked]")[:120])
+        check("free kit lock copy", "유료 플랜" in page.inner_text("[data-testid=kit-locked]"), page.inner_text("[data-testid=kit-locked]")[:120])
         page.click("[data-testid=kit-unlock]")
         page.wait_for_selector("[data-testid=pricing-modal]", timeout=10000)
-        page.click("[data-testid=plan-select-pro]")
+        page.click("[data-testid=plan-select-pass]")
         page.wait_for_timeout(600)
-        check("pro unlocks negotiation", page.locator("[data-testid=kit-locked]").count() == 0 and page.locator("[data-testid=kit-negotiation]").count() == 1)
-        check("pro badge restored", "Pro" in page.inner_text("[data-testid=open-pricing]"))
+        check("paid unlocks negotiation", page.locator("[data-testid=kit-locked]").count() == 0 and page.locator("[data-testid=kit-negotiation]").count() == 1)
+        check("paid badge restored", "이직 패스" in page.inner_text("[data-testid=open-pricing]"))
 
     step("plan lock roundtrip", plan_lock_roundtrip)
 
@@ -677,13 +752,25 @@ with sync_playwright() as p:
         while time.time() < deadline and page.locator("[data-testid=collect-sources] .chip").count() < 2:
             page.wait_for_timeout(400)
         page.wait_for_timeout(600)
-        cards = page.locator("[data-testid=hub-job]")
+        # 목록 정보만 있는 공고는 주로 잡코리아 목록에서 옵니다. 그 카드부터 확인하고,
+        # 없으면(소스 장애) 전체 카드를 훑습니다.
         target = None
-        for index in range(min(12, cards.count())):
-            cards.nth(index).click()
-            page.wait_for_timeout(350)
-            if page.locator("[data-testid=enrich-job]").count() == 1:
-                target = index
+        pools = [
+            page.locator("[data-testid=hub-job][data-source=jobkorea]"),
+            page.locator("[data-testid=hub-job]"),
+        ]
+        for pool in pools:
+            total = min(20, pool.count())
+            for index in range(total):
+                try:
+                    pool.nth(index).click(timeout=4000)
+                except Exception:  # noqa: BLE001
+                    continue
+                page.wait_for_timeout(320)
+                if page.locator("[data-testid=enrich-job]").count() == 1:
+                    target = index
+                    break
+            if target is not None:
                 break
         check("list-level job found", target is not None, str(target))
         if target is None:
@@ -801,6 +888,12 @@ with sync_playwright() as p:
         check("apply drawer email package", "[지원]" in kp.inner_text("[data-testid=apply-email-subject]"), kp.inner_text("[data-testid=apply-email-subject]"))
         check("apply drawer site link", (kp.get_attribute("[data-testid=apply-site]", "href") or "").startswith("https://"), kp.get_attribute("[data-testid=apply-site]", "href") or "")
         check("apply drawer honest note", "직접 진행" in kp.inner_text("[data-testid=apply-notes]"), kp.inner_text("[data-testid=apply-notes]")[:100])
+        check("apply drawer auto prep", wait_count(kp, "[data-testid=apply-intro]", 1, 60000), str(kp.locator("[data-testid=apply-prep]").count()))
+        intro = kp.inner_text("[data-testid=apply-intro]")
+        check("apply drawer 1min intro", len(intro) >= 80, intro[:80])
+        check("apply drawer 5 questions", kp.locator("[data-testid=apply-question]").count() == 5, str(kp.locator("[data-testid=apply-question]").count()))
+        check("apply drawer question answer", len(kp.inner_text("[data-testid=apply-question-answer]")) > 40, kp.inner_text("[data-testid=apply-question-answer]")[:80])
+        check("apply drawer prep ai", "AI 준비" in kp.inner_text("[data-testid=apply-prep-source]"), kp.inner_text("[data-testid=apply-prep-source]")[:60])
 
         kp.click("[data-testid=apply-record]")
         kp.wait_for_timeout(900)
@@ -817,6 +910,22 @@ with sync_playwright() as p:
         kp.wait_for_timeout(500)
         check("detail record chip", kp.locator("[data-testid=apply-recorded-detail]").count() == 1)
         check("kit context no overflow", no_overflow(kp), str(kp.evaluate("document.documentElement.scrollWidth")))
+
+        # 연속 지원 준비 — 적합 상위 3건을 한 드로어에서 차례로
+        if kp.locator("[data-testid=apply-queue]").count() == 1:
+            kp.click("[data-testid=apply-queue]")
+        else:
+            kp.click("[data-testid=prepare-top]")
+        kp.wait_for_selector("[data-testid=apply-drawer]", timeout=15000)
+        kp.wait_for_timeout(700)
+        pos = kp.inner_text("[data-testid=apply-queue-pos]")
+        check("queue opens with position", "/" in pos and pos.strip().startswith("1"), pos)
+        kp.click("[data-testid=apply-next]")
+        kp.wait_for_timeout(600)
+        pos2 = kp.inner_text("[data-testid=apply-queue-pos]")
+        check("queue moves to next job", pos2.strip().startswith("2"), pos2)
+        kp.click("[data-testid=apply-close]")
+        kp.wait_for_timeout(400)
 
         kp.click("[data-testid=nav-tracker]")
         kp.wait_for_timeout(900)
@@ -836,7 +945,7 @@ with sync_playwright() as p:
 
     # ────────────────────────── PDF 이력서 ──────────────────────────
     def pdf_resume():
-        pb = p.chromium.launch()
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
         pdf_ctx = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         pp = pdf_ctx.new_page()
         attach(pp, "pdf")
@@ -851,12 +960,47 @@ with sync_playwright() as p:
         pb.close()
 
     step("pdf resume", pdf_resume)
+
+    # ────────────────────────── DOCX · 붙여넣기 이력서 ──────────────────────────
+    def doc_formats():
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
+
+        dctx = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        dp = dctx.new_page()
+        attach(dp, "docx")
+        dp.goto(AI, wait_until="domcontentloaded")
+        dp.wait_for_selector("[data-testid=resume-card]", timeout=45000)
+        dp.set_input_files("[data-testid=resume-file]", os.path.join(FIXTURES, "my-resume.docx"))
+        dp.wait_for_selector("[data-testid=resume-status]", timeout=30000)
+        dp.wait_for_timeout(800)
+        check("docx resume registered", "등록됨" in dp.inner_text("[data-testid=resume-status]"), dp.inner_text("[data-testid=kit-slot-resume]")[:120])
+        check("docx resume parsed name", dp.inner_text("[data-testid=resume-name]") == "김하람", dp.inner_text("[data-testid=resume-name]"))
+        check("docx resume source", "my-resume.docx" in dp.inner_text("[data-testid=kit-slot-resume]"), dp.inner_text("[data-testid=kit-slot-resume]")[:140])
+        dctx.close()
+
+        pctx = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
+        pp = pctx.new_page()
+        attach(pp, "paste-resume")
+        pp.goto(AI, wait_until="domcontentloaded")
+        pp.wait_for_selector("[data-testid=resume-paste-toggle]", timeout=45000)
+        pp.click("[data-testid=resume-paste-toggle]")
+        pp.fill("[data-testid=resume-paste-text]", RESUME_TEXT)
+        pp.click("[data-testid=resume-paste-run]")
+        pp.wait_for_selector("[data-testid=resume-status]", timeout=30000)
+        pp.wait_for_timeout(800)
+        check("paste resume registered", "등록됨" in pp.inner_text("[data-testid=resume-status]"), pp.inner_text("[data-testid=kit-slot-resume]")[:120])
+        check("paste resume parsed name", pp.inner_text("[data-testid=resume-name]") == "김하람", pp.inner_text("[data-testid=resume-name]"))
+        check("paste resume source", "붙여넣은 이력서" in pp.inner_text("[data-testid=kit-slot-resume]"), pp.inner_text("[data-testid=kit-slot-resume]")[:140])
+        pctx.close()
+        pb.close()
+
+    step("docx and paste resume", doc_formats)
     stop_port(4383)
 
     # ────────────────────────── 키 없음 (규칙 문안) ──────────────────────────
     def nokey_mode():
         start_server("nokey", 4385)
-        pb = p.chromium.launch()
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
         ctx3 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         p3 = ctx3.new_page()
         attach(p3, "nokey")
@@ -880,7 +1024,7 @@ with sync_playwright() as p:
     # ────────────────────────── 서버 없음 (정적 호스팅) ──────────────────────────
     def offline_mode():
         start_server("offline", 4384)
-        pb = p.chromium.launch()
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
         ctx4 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         p4 = ctx4.new_page()
         attach(p4, "offline")
@@ -908,7 +1052,7 @@ with sync_playwright() as p:
     # ────────────────────────── Gemini 서버 키 모드 ──────────────────────────
     def gemini_mode():
         start_server("gemini", 4386)
-        pb = p.chromium.launch()
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
         ctx6 = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR")
         ctx6.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(PLAN_PRO)))
         p6 = ctx6.new_page()
@@ -935,7 +1079,7 @@ with sync_playwright() as p:
     # ────────────────────────── 모바일 390px ──────────────────────────
     def mobile():
         start_server("ai", 4383)
-        pb = p.chromium.launch()
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
         mctx = pb.new_context(viewport={"width": 390, "height": 844}, device_scale_factor=2, locale="ko-KR", is_mobile=True, has_touch=True)
         mp = mctx.new_page()
         attach(mp, "mobile")
@@ -960,6 +1104,39 @@ with sync_playwright() as p:
         stop_port(4383)
 
     step("mobile 390px", mobile)
+
+    # ────────────────────────── 요금제별 내보내기 (프리미엄 CSV · Free 잠금) ──────────────────────────
+    def premium_export():
+        try:
+            start_server("ai", 4383)
+        except RuntimeError:
+            pass
+        pb = p.chromium.launch(args=["--disable-dev-shm-usage"])
+        for plan, expect_download in ((PLAN_PREMIUM, True), ({"plan": "free", "trial": False, "startedAt": "", "expiresAt": None}, False)):
+            vctx = pb.new_context(viewport={"width": 1280, "height": 900}, locale="ko-KR", accept_downloads=True)
+            vctx.add_init_script("localStorage.setItem('jobfit.plan.v1', %s);" % json.dumps(json.dumps(plan)))
+            vctx.add_init_script("localStorage.setItem('jobfit.hub.jobs.v1', %s);" % json.dumps(json.dumps(SEED_HUB_JOBS, ensure_ascii=False)))
+            vp = vctx.new_page()
+            attach(vp, "export")
+            vp.goto(AI, wait_until="domcontentloaded")
+            vp.wait_for_selector("[data-testid=nav-tracker]", timeout=30000)
+            vp.click("[data-testid=nav-tracker]")
+            vp.wait_for_selector("[data-testid=tracker-card]", timeout=30000)
+            vp.wait_for_timeout(400)
+            if expect_download:
+                check("premium export button", vp.locator("[data-testid=pipeline-export]").count() == 1)
+                with vp.expect_download(timeout=8000) as info:
+                    vp.click("[data-testid=pipeline-export]")
+                name = info.value.suggested_filename
+                check("premium csv download", name.endswith(".csv") and "지원현황" in name, name)
+            else:
+                check("free export locked", vp.locator("[data-testid=pipeline-export-locked]").count() == 1)
+                check("free no export button", vp.locator("[data-testid=pipeline-export]").count() == 0)
+            vctx.close()
+        pb.close()
+        stop_port(4383)
+
+    step("premium export", premium_export)
 
 # ─────────────────────────────── 개인정보 0건 ───────────────────────────────
 print("── 개인정보 검사", flush=True)
